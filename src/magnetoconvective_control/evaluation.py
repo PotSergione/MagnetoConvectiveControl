@@ -121,7 +121,7 @@ def run_once(spec: dict, attempt: Path) -> None:
     from sb3_contrib import RecurrentPPO
 
     from .envs.smartsim_env import SB3MARLSmartSimVecEnv, SmartSimVecEnv
-    from .policies.cnn_lstm import CNNFeatureExtractor  # noqa: F401
+    from .policies.cnn_lstm import CNNFeatureExtractor
 
     attempt.mkdir(parents=True, exist_ok=False)
     work = attempt / "work"
@@ -158,7 +158,23 @@ def run_once(spec: dict, attempt: Path) -> None:
         episode_start = np.ones(env.num_envs, dtype=bool)
         model = None
         if spec["controller"] == "feedback":
-            model = RecurrentPPO.load(spec["checkpoint"], env=env, device="cpu")
+            # Historical checkpoints serialized this class as ``model.*``.
+            # Supplying the equivalent package-native kwargs avoids importing
+            # the old training directory solely to unpickle that alias.
+            policy_kwargs = {
+                "features_extractor_class": CNNFeatureExtractor,
+                "features_extractor_kwargs": {"features_dim": 128},
+                "normalize_images": False,
+                "lstm_hidden_size": 128,
+                "n_lstm_layers": 1,
+                "shared_lstm": False,
+                "enable_critic_lstm": True,
+                "log_std_init": -2.3,
+            }
+            model = RecurrentPPO.load(
+                spec["checkpoint"], env=env, device="cpu",
+                custom_objects={"policy_kwargs": policy_kwargs},
+            )
 
         for step in range(1, spec["horizon"] + 1):
             if model is None:
