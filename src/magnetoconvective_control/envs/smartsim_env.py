@@ -238,6 +238,7 @@ class SmartSimVecEnv:
         cpus_per_simulation: int | None = None,
         simulation_failure_penalty: float = 0.0,
         max_failure_restarts: int = 3,
+        snapshot_path: str | None = None,
     ):
         if n_envs < 1:
             raise ValueError("n_envs must be positive")
@@ -310,16 +311,35 @@ class SmartSimVecEnv:
         self.max_failure_restarts = max_failure_restarts
         self.sim_executable = str(executable)
 
-        snapshot_directory = (
-            Path(__file__).resolve().parent / "snapshots"
-            if snapshots_dir is None
-            else Path(snapshots_dir).expanduser().resolve()
+        if snapshot_path is not None and snapshots_dir is not None:
+            raise ValueError("Specify snapshot_path or snapshots_dir, not both")
+        self.snapshot_path = (
+            Path(snapshot_path).expanduser().resolve()
+            if snapshot_path is not None
+            else None
         )
-        if not snapshot_directory.is_dir():
-            raise FileNotFoundError(
-                f"Snapshot directory not found: {snapshot_directory}"
+        if self.snapshot_path is not None:
+            if not self.snapshot_path.is_file():
+                raise FileNotFoundError(
+                    f"Snapshot file not found: {self.snapshot_path}"
+                )
+            if re.fullmatch(r"blanket0\.f\d+", self.snapshot_path.name) is None:
+                raise ValueError(
+                    "Snapshot filename must look like blanket0.fNNNNN: "
+                    f"{self.snapshot_path.name}"
+                )
+            self.snapshots_dir = None
+        else:
+            snapshot_directory = (
+                Path(__file__).resolve().parent / "snapshots"
+                if snapshots_dir is None
+                else Path(snapshots_dir).expanduser().resolve()
             )
-        self.snapshots_dir = snapshot_directory
+            if not snapshot_directory.is_dir():
+                raise FileNotFoundError(
+                    f"Snapshot directory not found: {snapshot_directory}"
+                )
+            self.snapshots_dir = snapshot_directory
         self._snapshot_rng = random.SystemRandom()
         self._snapshot_queue: list[Path] = []
         if (
@@ -568,6 +588,9 @@ class SmartSimVecEnv:
 
     def _select_snapshot(self) -> Path:
         """Draw checkpoints from a shuffled cycle before reusing any one."""
+        if self.snapshot_path is not None:
+            return self.snapshot_path
+        assert self.snapshots_dir is not None
         files = sorted(path for path in self.snapshots_dir.iterdir() if path.is_file())
         unexpected = [
             path.name for path in files
@@ -1025,7 +1048,10 @@ class SmartSimVecEnv:
                 transition_diagnostics.update(
                     {"Tbar": float(self._last_tbar[env_id]),
                      "Kbar": float(self._last_kbar[env_id]),
-                     "action_sequence": int(self._action_sequences[env_id])}
+                     "Nu": float(self._last_nu[env_id]),
+                     "action_sequence": int(self._action_sequences[env_id]),
+                     "episode_step": int(self._episode_steps[env_id]),
+                     "snapshot": str(self._episode_snapshots[env_id])}
                 )
 
                 horizon_reached = (

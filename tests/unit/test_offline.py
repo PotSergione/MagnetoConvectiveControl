@@ -150,3 +150,21 @@ def test_restart_name_is_canonicalized_in_generated_case():
         namespace["_set_model_restart_file"](model, "blanketZik0.f00260")
         assert (root / "blanket0.f00260").read_bytes() == b"restart"
         assert "startFrom = blanket0.f00260" in (root / "blanket.par").read_text()
+
+
+def test_fixed_snapshot_selection_is_stable():
+    tree = ast.parse(ENV_PATH.read_text())
+    class_node = next(
+        node for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SmartSimVecEnv"
+    )
+    method = next(
+        node for node in class_node.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_select_snapshot"
+    )
+    namespace = {"Path": Path, "re": __import__("re")}
+    exec(compile(ast.Module([method], type_ignores=[]), str(ENV_PATH), "exec"), namespace)
+    snapshot = Path("blanket0.f00030")
+    env = type("Dummy", (), {"snapshot_path": snapshot})()
+    assert namespace["_select_snapshot"](env) == snapshot
+    assert namespace["_select_snapshot"](env) == snapshot
