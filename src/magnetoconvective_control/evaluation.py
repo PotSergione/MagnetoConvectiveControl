@@ -128,6 +128,24 @@ def run_once(spec: dict, attempt: Path) -> None:
     work.mkdir()
     (attempt / "run.json").write_text(json.dumps(spec, indent=2) + "\n")
 
+    # NekRS compiles blanket.udf in the worker directory.  Resolve the
+    # SmartRedis C++ interface from the Python environment running this
+    # evaluator, as the original training launcher did.
+    smartredis_include = Path(sys.prefix) / "include"
+    smartredis_library = Path(sys.prefix) / "lib" / "libsmartredis.so"
+    if not (smartredis_include / "client.h").is_file():
+        raise FileNotFoundError(smartredis_include / "client.h")
+    if not smartredis_library.is_file():
+        raise FileNotFoundError(smartredis_library)
+    os.environ["NEKRS_UDF_INCLUDES"] = str(smartredis_include)
+    os.environ["NEKRS_UDF_LIBS"] = str(smartredis_library)
+    runtime_library = work / "smartredis-lib"
+    runtime_library.mkdir()
+    (runtime_library / "libsmartredis.so").symlink_to(smartredis_library)
+    os.environ["LD_LIBRARY_PATH"] = ":".join(
+        filter(None, (str(runtime_library), os.environ.get("LD_LIBRARY_PATH")))
+    )
+
     old_directory = Path.cwd()
     core = env = None
     rows = []
