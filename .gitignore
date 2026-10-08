@@ -12,6 +12,7 @@ __pycache__/
 
 # Runtime artifacts
 runs/
+evaluation_runs/
 rl_training/
 tensorboard/
 models/
