@@ -1,0 +1,4 @@
+name: zero_action
+controller: constant
+action: 0.0
+horizon: 1000

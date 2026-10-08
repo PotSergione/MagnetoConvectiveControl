@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "magnetoconvective-control"
+version = "0.1.0"
+description = "Reinforcement-learning control of magnetoconvective blanket flows"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "gymnasium>=0.29",
+  "numpy>=1.26",
+  "PyYAML>=6",
+  "sb3-contrib>=2.3",
+  "smartredis>=0.6,<0.7",
+  "smartsim>=0.8,<0.9",
+  "stable-baselines3>=2.3",
+  "torch>=2.1",
+]
+
+[project.optional-dependencies]
+analysis = ["jupyterlab", "matplotlib", "pandas", "scipy"]
+test = ["pytest>=8"]
+
+[project.scripts]
+mcc-train = "magnetoconvective_control.cli.train:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

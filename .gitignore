@@ -1,0 +1,36 @@
+# Python and notebooks
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+
+# NekRS/OCCA compilation
+**/.cache/
+**/.local-tools/
+*.nek5000
+
+# Runtime artifacts
+runs/
+rl_training/
+tensorboard/
+models/
+snapshots/
+*.log
+*.out
+*.err
+slurm-*
+smartredis-*
+
+# NekRS restart/output fields
+*.f[0-9]*
+
+# Local machine configuration
+configs/machines/*.local.yaml
+.env
+
+# LaTeX products
+*.aux
+*.fdb_latexmk
+*.fls
+*.synctex.gz

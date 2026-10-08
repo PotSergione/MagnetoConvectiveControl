@@ -1,0 +1,24 @@
+schema_version: 1
+name: toroidal_gr1e9_ha1750
+solver: nekrs
+case_prefix: blanket
+
+files:
+  parameter: blanket.par
+  udf: blanket.udf
+  mesh: blanket.re2
+  launcher: run_case.sh
+
+physics:
+  grashof: 1.0e9
+  prandtl: 0.0321
+  hartmann: 1750.0
+  magnetic_field: [0.0, 0.0, 1.0]
+
+interface:
+  control_interval: 0.1
+  action_count: 10
+  action_bounds: [-0.25, 0.25]
+  wall_shape: [128, 160]
+  observation_channels: [y_minus, y_plus, x_plus]
+  reward_inputs: [x_minus_integrated_heat_flux, total_heating_power]

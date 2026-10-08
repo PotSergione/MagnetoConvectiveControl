@@ -1,0 +1,21 @@
+schema_version: 1
+name: toroidal_gr1e9_training_snapshots_v1
+case: toroidal_gr1e9_ha1750
+status: external
+source: private research archive
+files:
+  - name: blanket0.f00250
+    size: 53423336
+    sha256: 4e25f9936d545285d77c69c694e26c299e97d6c21b942d55c042164acf8a4f78
+  - name: blanket0.f00260
+    size: 53423336
+    sha256: 3b6aaa943ef7acee5cf30264094332b8fa9166e41b3867e753ed95b73b2a23c4
+  - name: blanket0.f00270
+    size: 53423336
+    sha256: 3d23543e878de3211608958635d9ca6802641b58b020f489e162815df39448bc
+  - name: blanket0.f00280
+    size: 53423336
+    sha256: d66aeecfc82def67d1f43a50b9e6742ecccf842649e3585d8a6d8c3b35dfcc85
+  - name: blanket0.f00290
+    size: 53423336
+    sha256: d8bd4c738682d8b87871184c58c543209ca3e33f2215721294170c1492c179b9

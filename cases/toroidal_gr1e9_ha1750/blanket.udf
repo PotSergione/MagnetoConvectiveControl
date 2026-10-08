@@ -1,0 +1,574 @@
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstdint>
+#include <fstream>
+#include <iomanip>
+#include <memory>
+#include <random>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <vector>
+#include "client.h"
+#include "../examples/mhdLaminar/thanh3/hmhSolver.hpp"
+
+// Boundary IDs expected from the future mesh:
+//   1=x-, 2=x+, 3=y-, 4=y+, with periodicity in z.
+// Ten smoothed electrode pairs are applied on the y-normal walls.
+
+#ifdef __okl__
+
+void codedFixedValueScalar(bcData *bc)
+{
+  bc->s = 0.0;
+}
+
+@kernel void internalHeating(const dlong Nelements,
+                             const dfloat coefficient,
+                             @ restrict const dfloat *X,
+                             @ restrict dfloat *source)
+{
+  for (dlong e = 0; e < Nelements; ++e; @outer(0)) {
+    for (int n = 0; n < p_Np; ++n; @inner(0)) {
+      const dlong id = e * p_Np + n;
+      // Temperature equation: DT/Dt = kappa [laplacian(T) + exp(-(x+1))].
+      source[id] = coefficient * exp(-(X[id] + 1.0));
+    }
+  }
+}
+
+#endif
+
+static constexpr int nElectrodes = 10;
+static constexpr dfloat Lz = 31.41592653589793;
+static constexpr dfloat pi = Lz / 10.0;
+static constexpr dfloat electrodeXHalfWidth = 0.7;
+static constexpr dfloat electrodeZHalfWidth = 1.0;
+static constexpr dfloat electrodeSmoothing = 0.2;
+static constexpr dfloat actionLowerBound = -0.25;
+static constexpr dfloat actionUpperBound = 0.25;
+static constexpr dfloat randomControlStartTime = 300.0;
+static constexpr dfloat randomControlEndTime = 400.0;
+static constexpr dfloat kickStartTime = 200.0;
+static constexpr dfloat kickEndTime = 200.1;
+
+static dfloat B0x = 0.0;
+static dfloat B0y = 0.0;
+static dfloat B0z = 1.0;
+static dfloat grashof = 1.0e9;
+static dfloat prandtl = 0.0321;
+static dfloat hartmann = 1750.0;
+static dfloat interactionParameter = 0.0;
+static dfloat thermalSourceCoeff = 0.0;
+static int nusseltInterval = 100;
+static bool randomAction = false;
+static bool kick = false;
+static bool kickStarted = false;
+static bool kickFinished = false;
+static dfloat nusseltSum = 0.0;
+static long long nusseltSamples = 0;
+static std::string statisticsFileName;
+static std::array<dfloat, nElectrodes> electrodeControl = {};
+static std::mt19937 randomActionGenerator(5489u);
+static std::uniform_real_distribution<dfloat>
+  randomActionDistribution(-.25, .25);
+
+static double redisPublishInterval = 0.1;
+static double nextRedisPublishTime = 0.1;
+static int redisRank = 0;
+static int64_t appliedActionSequence = 0;
+static std::unique_ptr<SmartRedis::Client> redisClient;
+
+static std::string redisKey(const std::string &field)
+{
+  return "nekrs:rank:" + std::to_string(redisRank) + ":" + field;
+}
+
+deviceMemory<dfloat> o_phi;
+deviceMemory<dfloat> o_phiCoeff;
+deviceMemory<dfloat> o_B0;
+deviceMemory<dfloat> o_current;
+deviceMemory<dfloat> o_lorentz;
+
+static void sampleRandomAction()
+{
+  for (auto &control : electrodeControl) {
+    control = randomActionDistribution(randomActionGenerator);
+  }
+}
+
+static dfloat rectangularElectrode(dfloat x, dfloat z, dfloat z0)
+{
+  const dfloat xShape =
+    std::tanh((x + electrodeXHalfWidth) / electrodeSmoothing) -
+    std::tanh((x - electrodeXHalfWidth) / electrodeSmoothing);
+  const dfloat zShape =
+    std::tanh((z - z0 + electrodeZHalfWidth) / electrodeSmoothing) -
+    std::tanh((z - z0 - electrodeZHalfWidth) / electrodeSmoothing);
+  return 0.25 * xShape * zShape;
+}
+
+static void applyPhiDirichletBC()
+{
+  auto mesh = nrs->mesh;
+  auto [x, y, z] = mesh->xyzHost();
+  std::vector<dfloat> phi(mesh->Nlocal);
+  o_phi.copyTo(phi, mesh->Nlocal);
+
+  for (dlong e = 0; e < mesh->Nelements; ++e) {
+    for (int f = 0; f < mesh->Nfaces; ++f) {
+      const int bID = mesh->EToB[f + e * mesh->Nfaces];
+      if (bID != 3 && bID != 4) continue;
+
+      for (int m = 0; m < mesh->Nfp; ++m) {
+        const dlong id = e * mesh->Np + mesh->faceNodes[f * mesh->Nfp + m];
+        dfloat potential = 0.0;
+        for (int electrode = 0; electrode < nElectrodes; ++electrode) {
+          // Centres: z_k=(2k+1)*pi/2, k=0,...,9, over the full 10*pi duct.
+          const dfloat z0 = (2 * electrode + 1) * pi / 2.0;
+          potential += electrodeControl[electrode] *
+                       rectangularElectrode(x[id], z[id], z0);
+        }
+        phi[id] = (bID == 3) ? potential : -potential;
+      }
+    }
+  }
+  o_phi.copyFrom(phi.data(), mesh->Nlocal);
+}
+
+static void inductionlessForce()
+{
+  auto mesh = nrs->mesh;
+  const dlong N = mesh->Nlocal;
+  const dlong offset = nrs->fieldOffset;
+
+  auto o_uCrossB0 = platform->deviceMemoryPool.reserve<dfloat>(3 * offset);
+  platform->linAlg->crossProduct(N, offset, nrs->o_U, o_B0, o_uCrossB0);
+
+  auto o_rhs = platform->deviceMemoryPool.reserve<dfloat>(N);
+  opSEM::strongDivergence(mesh, offset, o_uCrossB0, o_rhs);
+  platform->linAlg->scale(N, -1.0, o_rhs);
+
+  applyPhiDirichletBC();
+  hmhSolver::solve("phi", o_phiCoeff, o_NULL, o_rhs, o_phi, false);
+
+  opSEM::strongGrad(mesh, offset, o_phi, o_current);
+  oogs::startFinish(o_current, mesh->dim, offset, ogsDfloat, ogsAdd, nrs->gsh);
+  platform->linAlg->axmyVector(N, offset, 0, 1.0, mesh->o_invAJw, o_current);
+
+  // j = -grad(phi) + u x B0.
+  platform->linAlg->axpbyMany(N, mesh->dim, offset,
+                              -1.0, o_current, 1.0, o_uCrossB0);
+  o_current.copyFrom(o_uCrossB0, 3 * offset);
+
+  // Add N*(j x B0) to the momentum source.
+  platform->linAlg->crossProduct(N, offset, o_current, o_B0, o_lorentz);
+  platform->linAlg->axpbyMany(N, mesh->dim, offset,
+                              interactionParameter, o_lorentz, 1.0, nrs->o_NLT);
+}
+
+static void userVelocitySource(double time)
+{
+  auto mesh = nrs->mesh;
+  auto o_Fy = nrs->o_NLT.slice(nrs->fieldOffset, nrs->fieldOffset);
+  // Free-fall scaling gives the unit buoyancy term T*e_y.
+  platform->linAlg->axpby(mesh->Nlocal, 1.0, nrs->cds->o_S, 1.0, o_Fy);
+  inductionlessForce();
+}
+
+static void userScalarSource(double time)
+{
+  auto cds = nrs->cds;
+  auto mesh = cds->mesh[0];
+  internalHeating(mesh->Nelements, thermalSourceCoeff, mesh->o_x, cds->o_NLT);
+}
+
+static dfloat integratedXMinusHeatFlux()
+{
+  auto mesh = nrs->mesh;
+  const dlong N = mesh->Nlocal;
+  const dlong offset = nrs->fieldOffset;
+
+  // Form a continuous nodal temperature gradient from the element-local
+  // strong gradient, using the same assembly applied to grad(phi) above.
+  auto o_gradT = platform->deviceMemoryPool.reserve<dfloat>(mesh->dim * offset);
+  opSEM::strongGrad(mesh, offset, nrs->cds->o_S, o_gradT);
+  oogs::startFinish(o_gradT, mesh->dim, offset, ogsDfloat, ogsAdd, nrs->gsh);
+  platform->linAlg->axmyVector(N, offset, 0, 1.0, mesh->o_invAJw, o_gradT);
+
+  // Boundary IDs are 1=x-, 2=x+, 3=y-, and 4=y+.  NekRS supplies the
+  // outward normal and surface GLL weights.  Multiplication by -kappa gives
+  // outward conductive heat flow, positive when heat leaves the fluid.
+  static deviceMemory<int> o_xMinusBoundary;
+  if (!o_xMinusBoundary.isInitialized()) {
+    o_xMinusBoundary.resize(1);
+    o_xMinusBoundary.copyFrom(std::vector<int>{1});
+  }
+
+  const dfloat fluxXMinus =
+    -thermalSourceCoeff *
+    mesh->surfaceAreaNormalMultiplyIntegrate(offset, 1, o_xMinusBoundary, o_gradT).at(0);
+  return fluxXMinus;
+}
+
+struct ObservedWallData
+{
+  std::vector<dfloat> heatFlux;
+  std::vector<dfloat> transverse;
+  std::vector<dfloat> z;
+};
+
+static std::array<ObservedWallData, 3> observedWallHeatFluxFields()
+{
+  auto mesh = nrs->mesh;
+  const dlong N = mesh->Nlocal;
+  const dlong offset = nrs->fieldOffset;
+  auto o_gradT = platform->deviceMemoryPool.reserve<dfloat>(mesh->dim * offset);
+  opSEM::strongGrad(mesh, offset, nrs->cds->o_S, o_gradT);
+  oogs::startFinish(o_gradT, mesh->dim, offset, ogsDfloat, ogsAdd, nrs->gsh);
+  platform->linAlg->axmyVector(N, offset, 0, 1.0, mesh->o_invAJw, o_gradT);
+
+  std::vector<dfloat> gradT(mesh->dim * offset);
+  o_gradT.copyTo(gradT.data(), gradT.size());
+  auto [x, y, z] = mesh->xyzHost();
+  std::array<ObservedWallData, 3> walls;
+
+  for (dlong e = 0; e < mesh->Nelements; ++e) {
+    for (int f = 0; f < mesh->Nfaces; ++f) {
+      const int bID = mesh->EToB[f + e * mesh->Nfaces];
+      if (bID != 2 && bID != 3 && bID != 4) continue;
+      const int wallIndex = (bID == 3) ? 0 : ((bID == 4) ? 1 : 2);
+      auto &wall = walls[wallIndex];
+      for (int m = 0; m < mesh->Nfp; ++m) {
+        const dlong id = e * mesh->Np + mesh->faceNodes[f * mesh->Nfp + m];
+        const dfloat normalGradient =
+          (bID == 2) ? gradT[id] : ((bID == 3) ? -gradT[offset + id]
+                                                   : gradT[offset + id]);
+        wall.heatFlux.push_back(-thermalSourceCoeff * normalGradient);
+        wall.transverse.push_back((bID == 2) ? y[id] : x[id]);
+        wall.z.push_back(z[id]);
+      }
+    }
+  }
+
+#ifdef NEKRS_USE_DFLOAT_FLOAT
+  const MPI_Datatype mpiDfloat = MPI_FLOAT;
+#else
+  const MPI_Datatype mpiDfloat = MPI_DOUBLE;
+#endif
+  for (auto &wall : walls) {
+    const int localCount = static_cast<int>(wall.heatFlux.size());
+    int commSize = 1;
+    MPI_Comm_size(platform->comm.mpiComm, &commSize);
+    std::vector<int> counts(commSize);
+    MPI_Allgather(&localCount, 1, MPI_INT, counts.data(), 1, MPI_INT,
+                  platform->comm.mpiComm);
+    std::vector<int> displacements(commSize, 0);
+    for (int rank = 1; rank < commSize; ++rank) {
+      displacements[rank] = displacements[rank - 1] + counts[rank - 1];
+    }
+    const int globalCount = displacements.back() + counts.back();
+    auto assemble = [&](std::vector<dfloat> &values) {
+      std::vector<dfloat> global(globalCount);
+      MPI_Allgatherv(values.data(), localCount, mpiDfloat, global.data(),
+                     counts.data(), displacements.data(), mpiDfloat,
+                     platform->comm.mpiComm);
+      values.swap(global);
+    };
+    assemble(wall.heatFlux);
+    assemble(wall.transverse);
+    assemble(wall.z);
+  }
+  return walls;
+}
+
+static void ensureRedisClient()
+{
+  if (redisRank != 0) return;
+  if (!redisClient) {
+    redisClient = std::make_unique<SmartRedis::Client>(
+      false, "nekrs-rank-" + std::to_string(redisRank));
+  }
+}
+
+static void publishToRedis(double time, int tstep)
+{
+  auto mesh = nrs->mesh;
+  const auto walls = observedWallHeatFluxFields();
+  const dfloat xMinusHeatFlux = integratedXMinusHeatFlux();
+  static constexpr std::array<const char *, 3> wallNames = {
+    "yMinus", "yPlus", "xPlus"
+  };
+
+#ifdef NEKRS_USE_DFLOAT_FLOAT
+  constexpr SRTensorType fieldType = SRTensorTypeFloat;
+#else
+  constexpr SRTensorType fieldType = SRTensorTypeDouble;
+#endif
+
+  const dfloat meanTemperature =
+    platform->linAlg->innerProd(mesh->Nlocal, nrs->cds->o_S, mesh->o_LMM,
+                                platform->comm.mpiComm) / mesh->volume;
+  const dfloat totalHeating = 2.0 * (1.0 - std::exp(-2.0));
+  const dfloat totalHeatingPower =
+    thermalSourceCoeff * totalHeating * 10.0 * std::acos(-1.0);
+  const dfloat nusselt = totalHeating / meanTemperature;
+  const dfloat velocityL2 =
+    platform->linAlg->weightedNorm2Many(mesh->Nlocal, mesh->dim,
+                                        nrs->fieldOffset, mesh->o_LMM,
+                                        nrs->o_U, platform->comm.mpiComm);
+  const dfloat kineticEnergy = 0.5 * velocityL2 * velocityL2 / mesh->volume;
+
+  if (redisRank != 0) return;
+  ensureRedisClient();
+
+  for (int wall = 0; wall < 3; ++wall) {
+    const std::string prefix = wallNames[wall];
+    redisClient->put_tensor(redisKey(prefix + "HeatFlux"),
+                            walls[wall].heatFlux.data(),
+                            {walls[wall].heatFlux.size()}, fieldType,
+                            SRMemLayoutContiguous);
+    redisClient->put_tensor(redisKey(prefix + "Transverse"),
+                            walls[wall].transverse.data(),
+                            {walls[wall].transverse.size()}, fieldType,
+                            SRMemLayoutContiguous);
+    redisClient->put_tensor(redisKey(prefix + "Z"), walls[wall].z.data(),
+                            {walls[wall].z.size()}, fieldType,
+                            SRMemLayoutContiguous);
+  }
+
+  redisClient->put_tensor(redisKey("Tbar"), &meanTemperature, {1}, fieldType,
+                          SRMemLayoutContiguous);
+  redisClient->put_tensor(redisKey("Nu"), &nusselt, {1}, fieldType,
+                          SRMemLayoutContiguous);
+  redisClient->put_tensor(redisKey("Kbar"), &kineticEnergy, {1}, fieldType,
+                          SRMemLayoutContiguous);
+  redisClient->put_tensor(redisKey("xMinusIntegratedHeatFlux"),
+                          &xMinusHeatFlux, {1}, fieldType,
+                          SRMemLayoutContiguous);
+  redisClient->put_tensor(redisKey("totalHeatingPower"), &totalHeatingPower,
+                          {1}, fieldType, SRMemLayoutContiguous);
+
+  std::array<double, nElectrodes> appliedAction;
+  for (int electrode = 0; electrode < nElectrodes; ++electrode) {
+    appliedAction[electrode] = electrodeControl[electrode];
+  }
+  redisClient->put_tensor(redisKey("timeIntensity"), appliedAction.data(),
+                          {nElectrodes}, SRTensorTypeDouble,
+                          SRMemLayoutContiguous);
+  redisClient->put_tensor(redisKey("actionSequence"), &appliedActionSequence,
+                          {1}, SRTensorTypeInt64, SRMemLayoutContiguous);
+  const int64_t step = tstep;
+  redisClient->put_tensor(redisKey("step"), &step, {1}, SRTensorTypeInt64,
+                          SRMemLayoutContiguous);
+  // The commit marker is written last. Python may now submit the next action.
+  redisClient->put_tensor(redisKey("time"), &time, {1}, SRTensorTypeDouble,
+                          SRMemLayoutContiguous);
+}
+
+static void fetchNextAction()
+{
+  int64_t requestedSequence = appliedActionSequence;
+  std::array<double, nElectrodes> requestedAction = {};
+  if (redisRank == 0) {
+    ensureRedisClient();
+    while (requestedSequence <= appliedActionSequence) {
+      redisClient->unpack_tensor("nekrs:actionSequence", &requestedSequence,
+                                 {1}, SRTensorTypeInt64,
+                                 SRMemLayoutContiguous);
+      if (requestedSequence <= appliedActionSequence) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+    }
+    redisClient->unpack_tensor("nekrs:timeIntensity", requestedAction.data(),
+                               {nElectrodes}, SRTensorTypeDouble,
+                               SRMemLayoutContiguous);
+  }
+  MPI_Bcast(&requestedSequence, 1, MPI_INT64_T, 0, platform->comm.mpiComm);
+  MPI_Bcast(requestedAction.data(), nElectrodes, MPI_DOUBLE, 0,
+            platform->comm.mpiComm);
+  for (int electrode = 0; electrode < nElectrodes; ++electrode) {
+    if (!std::isfinite(requestedAction[electrode])) {
+      throw std::runtime_error("received a non-finite electrode action");
+    }
+    electrodeControl[electrode] = std::clamp(
+      requestedAction[electrode], static_cast<double>(actionLowerBound),
+      static_cast<double>(actionUpperBound));
+  }
+  appliedActionSequence = requestedSequence;
+}
+
+void UDF_Setup0(MPI_Comm comm, setupAide &options)
+{
+  MPI_Comm_rank(comm, &redisRank);
+  platform->par->extract("casedata", "b0x", B0x);
+  platform->par->extract("casedata", "b0y", B0y);
+  platform->par->extract("casedata", "b0z", B0z);
+  platform->par->extract("casedata", "grashof", grashof);
+  platform->par->extract("casedata", "prandtl", prandtl);
+  platform->par->extract("casedata", "hartmann", hartmann);
+  platform->par->extract("casedata", "nusseltinterval", nusseltInterval);
+  platform->par->extract("casedata", "redispublishinterval", redisPublishInterval);
+  platform->par->extract("casedata", "randomaction", randomAction);
+  // Optional: absent from CASEDATA means false.
+  platform->par->extract("casedata", "kick", kick);
+  for (int electrode = 0; electrode < nElectrodes; ++electrode) {
+    platform->par->extract("casedata",
+                           "electrode" + std::to_string(electrode),
+                           electrodeControl[electrode]);
+  }
+
+  // Controlled validation cases first establish an uncontrolled baseline.
+  // The first random action is selected at t=300 in UDF_ExecuteStep.
+  if (randomAction || kick) electrodeControl.fill(0.0);
+
+  if (grashof <= 0.0 || prandtl <= 0.0 || hartmann < 0.0) {
+    if (platform->comm.mpiRank == 0) {
+      std::fprintf(stderr,
+                   "grashof and prandtl must be positive, and hartmann non-negative\n");
+    }
+    MPI_Abort(comm, EXIT_FAILURE);
+  }
+  if (redisPublishInterval <= 0.0) {
+    if (redisRank == 0) {
+      std::fprintf(stderr, "redisPublishInterval must be positive\n");
+    }
+    MPI_Abort(comm, EXIT_FAILURE);
+  }
+  if (randomAction || kick) {
+    if (redisRank == 0) {
+      std::fprintf(stderr, "randomAction and kick must be false for RL\n");
+    }
+    MPI_Abort(comm, EXIT_FAILURE);
+  }
+  electrodeControl.fill(0.0);
+  nextRedisPublishTime = redisPublishInterval;
+
+  // Free-fall nondimensionalization: Re_f=sqrt(Gr), nu=1/Re_f,
+  // kappa=1/(Pr*Re_f), and the Stuart number N=Ha^2/Re_f.
+  const dfloat freeFallReynolds = std::sqrt(grashof);
+  const dfloat viscosity = 1.0 / freeFallReynolds;
+  const dfloat thermalDiffusivity = 1.0 / (prandtl * freeFallReynolds);
+  interactionParameter = hartmann * hartmann / freeFallReynolds;
+  thermalSourceCoeff = thermalDiffusivity;
+
+  std::ostringstream statisticsName;
+  statisticsName << "statistics_Gr_"
+                 << std::scientific << std::setprecision(2)
+                 << grashof;
+  if (randomAction) statisticsName << "_controlled_";
+  else if (kick) statisticsName << "_kick_";
+  statisticsName << ".csv";
+  statisticsFileName = statisticsName.str();
+
+  options.setArgs("VISCOSITY", to_string_f(viscosity));
+  options.setArgs("SCALAR00 DIFFUSIVITY", to_string_f(thermalDiffusivity));
+
+  if (platform->comm.mpiRank == 0) {
+    std::printf("dimensionless-parameters Gr=%.8e Pr=%.8e Ha=%.8e Re_f=%.8e nu=%.8e kappa=%.8e N=%.8e\n",
+                grashof,
+                prandtl,
+                hartmann,
+                freeFallReynolds,
+                viscosity,
+                thermalDiffusivity,
+                interactionParameter);
+    std::printf("statistics-file %s\n", statisticsFileName.c_str());
+    std::printf("random-action %s\n", randomAction ? "true" : "false");
+    std::printf("kick %s%s\n",
+                kick ? "true" : "false",
+                (kick && randomAction) ? " (ignored because randomAction=true)" : "");
+  }
+
+  hmhSolver::setup0("phi", 1);
+}
+
+void UDF_LoadKernels(deviceKernelProperties &kernelInfo)
+{
+  hmhSolver::buildKernel("phi", kernelInfo);
+}
+
+void UDF_Setup()
+{
+  auto mesh = nrs->mesh;
+  const dlong N = mesh->Nlocal;
+  const dlong offset = nrs->fieldOffset;
+
+  o_phi.resize(N);
+  o_phiCoeff.resize(N);
+  o_B0.resize(3 * offset);
+  o_current.resize(3 * offset);
+  o_lorentz.resize(3 * offset);
+  platform->linAlg->fill(N, 0.0, o_phi);
+  platform->linAlg->fill(N, 1.0, o_phiCoeff);
+  platform->linAlg->fill(3 * offset, 0.0, o_B0);
+  platform->linAlg->fill(3 * offset, 0.0, o_current);
+  platform->linAlg->fill(3 * offset, 0.0, o_lorentz);
+  platform->linAlg->fill(N, B0x, o_B0.slice(0 * offset, offset));
+  platform->linAlg->fill(N, B0y, o_B0.slice(1 * offset, offset));
+  platform->linAlg->fill(N, B0z, o_B0.slice(2 * offset, offset));
+
+  // As in the supplied control template: x walls insulating; opposite-potential
+  // control walls use Dirichlet data. With all controls zero this is the passive
+  // validation case while retaining the electrode implementation.
+  std::vector<char> phiBC = {'x', 'n', 'n', 'd', 'd'};
+  hmhSolver::setup("phi", mesh, phiBC, o_phiCoeff, o_NULL);
+
+  nrs->addUserCheckpointField(
+    "scalar01", std::vector<deviceMemory<dfloat>>{o_phi});
+  nrs->addUserCheckpointField(
+    "scalar02", std::vector<deviceMemory<dfloat>>{o_current.slice(0 * offset, N)});
+  nrs->addUserCheckpointField(
+    "scalar03", std::vector<deviceMemory<dfloat>>{o_current.slice(1 * offset, N)});
+  nrs->addUserCheckpointField(
+    "scalar04", std::vector<deviceMemory<dfloat>>{o_current.slice(2 * offset, N)});
+
+  nrs->userVelocitySource = &userVelocitySource;
+  nrs->userScalarSource = &userScalarSource;
+
+  if (platform->options.getArgs("RESTART FILE NAME").empty()) {
+    std::vector<dfloat> U(mesh->dim * offset, 0.0);
+    std::vector<dfloat> P(offset, 0.0);
+    std::vector<dfloat> T(N, 0.0);
+    auto [x, y, z] = mesh->xyzHost();
+    std::mt19937 generator(5489u); // deterministic validation perturbation
+    std::uniform_real_distribution<dfloat> noise(-1.0e-4, 1.0e-4);
+    for (dlong n = 0; n < N; ++n) {
+      U[n + 0 * offset] = noise(generator);
+      U[n + 1 * offset] = noise(generator);
+      U[n + 2 * offset] = noise(generator);
+    }
+    nrs->o_U.copyFrom(U.data(), U.size());
+    nrs->o_P.copyFrom(P.data(), P.size());
+    nrs->cds->o_S.copyFrom(T.data(), T.size());
+  }
+}
+
+void UDF_ExecuteStep(double time, int tstep)
+{
+  if (!nrs->timeStepConverged) return;
+  const double tolerance = 1e-10 * std::max(1.0, std::abs(time));
+  if (time + tolerance < nextRedisPublishTime) return;
+
+  try {
+    // Publish the state and action that produced it, then wait for the next
+    // sequenced action. This provides an exact synchronous RL transition.
+    publishToRedis(time, tstep);
+    fetchNextAction();
+  } catch (const std::exception &error) {
+    std::fprintf(stderr,
+                 "Rank %d failed during SmartRedis exchange at t=%.8e: %s\n",
+                 redisRank, time, error.what());
+    redisClient.reset();
+    throw;
+  }
+
+  do {
+    nextRedisPublishTime += redisPublishInterval;
+  } while (nextRedisPublishTime <= time + tolerance);
+}

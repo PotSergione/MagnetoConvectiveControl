@@ -1,0 +1,11 @@
+launcher:
+  type: slurm
+  cpus_per_simulation: 4
+  simulations_per_gpu: 1
+  gpu_resource: gpu:a100_80g:1
+
+smartsim:
+  interface: lo
+
+# Do not commit usernames or site-private paths. Copy this file to a `.local.yaml`
+# profile and provide cluster-specific modules and storage paths there.

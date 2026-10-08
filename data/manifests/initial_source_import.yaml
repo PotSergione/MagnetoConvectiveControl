@@ -1,0 +1,16 @@
+schema_version: 1
+name: initial_source_import
+parent_revision: b45a21e1ef21ef2e7ac87a8df237c0aa29f27797
+files:
+  - destination: cases/toroidal_gr1e9_ha1750/blanket.par
+    source_sha256: d93886c7605b8180481abb6860a20342e9211ac6773d4565ee65e0b0d21b307e
+  - destination: cases/toroidal_gr1e9_ha1750/blanket.udf
+    source_sha256: 3c42df8a4e5dd7e3005e14b843f4234f4977e9a34718423634ef53f0847710bd
+  - destination: cases/toroidal_gr1e9_ha1750/blanket.re2
+    source_sha256: 713445909390a3e2d75aa69a08177e4ed3c790bffb4889e5e88860d073b88ccf
+  - destination: src/magnetoconvective_control/envs/smartsim_env.py
+    source_sha256: 90f1ce758611e64607a6bfc98f2be1b685035db3bce3131f66fb786bdd8f8b72
+  - destination: src/magnetoconvective_control/training/train.py
+    source_sha256: 1621c81e04d8252bf84d9d46daa1b0b6debbcf4e399286313c61e8f2048210d7
+  - destination: src/magnetoconvective_control/policies/cnn_lstm.py
+    source_sha256: 1e5e7e68ffed64a6e45c66f30df8718d015cdd162e1d9a7d9c181082104e5382

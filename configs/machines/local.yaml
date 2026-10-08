@@ -1,0 +1,13 @@
+launcher:
+  type: local
+  cpus_per_simulation: 1
+  simulations_per_gpu: 1
+  gpu_resource: gpu:1
+
+smartsim:
+  interface: lo
+
+# Site-dependent paths should normally be supplied by the shell:
+#   NEKRS_HOME=/path/to/nekrs
+#   MCC_ARTIFACT_ROOT=/path/to/runs
+#   RL_SNAPSHOTS_DIR=/path/to/snapshots

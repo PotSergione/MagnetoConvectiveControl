@@ -1,0 +1,65 @@
+[GENERAL]
+# Enable only after a completed checkpoint exists, for example:
+# startFrom = blanket0.f00099
+dealiasing = true
+polynomialOrder = 6
+# Safely covers a 1002-transition episode plus its initial committed frame.
+numSteps = 100300
+dt = 1.0e-3
+timeStepper = tombo3
+checkpointInterval = 0
+
+[PROBLEMTYPE]
+equation = navierStokes
+
+[MESH]
+# Expected future mesh labels: 1=x-, 2=x+, 3=y-, 4=y+; z is periodic.
+boundaryIDMap = 1,2,3,4
+
+[PRESSURE]
+solver = pgmres
+residualTol = 1.0e-9
+maxIterations = 1500
+initialGuess = projectionAconj+nVector=10
+
+[VELOCITY]
+boundaryTypeMap = wall, wall, wall, wall, none, none
+residualTol = 1.0e-8
+density = 1.0
+# Required parser value; UDF_Setup0 replaces it with 1/sqrt(Gr).
+viscosity = 3.1622776601683795e-5
+initialGuess = projectionAconj+nVector=10
+
+[SCALAR00]
+# Temperature is zero on all transverse walls.
+boundaryTypeMap = codedFixedValue, codedFixedValue, codedFixedValue, codedFixedValue, none, none
+residualTol = 1.0e-8
+density = 1.0
+# Required parser value; UDF_Setup0 replaces it with 1/(Pr*sqrt(Gr)).
+diffusivity = 9.851332274667850e-4
+initialGuess = projectionAconj+nVector=10
+
+[CASEDATA]
+b0x = 0.0
+b0y = 0.0
+b0z = 1.0
+grashof = 1.0e9
+prandtl = 0.0321
+hartmann = 1750.0
+nusseltInterval = 100
+redisPublishInterval = 0.1
+# SmartRedis is the sole action source in the RL case.
+randomAction = false
+kick = false
+
+# Validation controls. The ten electrode-pair amplitudes are zero by default.
+electrode0 = 0.0
+electrode1 = 0.0
+electrode2 = 0.0
+electrode3 = 0.0
+electrode4 = 0.0
+electrode5 = 0.0
+electrode6 = 0.0
+electrode7 = 0.0
+electrode8 = 0.0
+electrode9 = 0.0
