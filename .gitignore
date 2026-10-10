@@ -8,6 +8,7 @@ __pycache__/
 # NekRS/OCCA compilation
 **/.cache/
 **/.local-tools/
+.smartredis-lib/
 *.nek5000
 
 # Runtime artifacts
