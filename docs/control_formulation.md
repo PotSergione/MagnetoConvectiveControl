@@ -483,6 +483,116 @@ Use 1000--2000-transition evaluation episodes where affordable.  The principal
 claim is sustained improvement in heat transfer, not short-term return or
 pointwise reproduction of one chaotic trajectory.
 
+## Held-out evaluation of the 275k policy
+
+The first confirmatory campaign evaluated the deterministic 275,000-sample
+checkpoint against uniform constant actuation `a_i = 0.01`. Ten uncontrolled
+restart fields at `t = 310, 320, ..., 400` were frozen before evaluation. Each
+controller was run for 1000 physical control transitions from every field,
+with controller order counterbalanced across the ten pairs. The prespecified
+primary statistic was the paired total-return difference
+
+\[
+  \Delta_i=R_{\mathrm{feedback},i}-R_{\mathrm{constant},i},
+\]
+
+tested by enumerating all `2^10` sign assignments. The campaign completed all
+20 trajectories. Its primary results were:
+
+| Statistic | Result |
+|---|---:|
+| Mean paired return difference | -4.0940 |
+| Median paired return difference | -4.4988 |
+| Feedback wins | 2 of 10 |
+| Exact two-sided sign-flip `p` | 0.1621 |
+
+This does not establish a statistically significant difference and provides
+no evidence that this checkpoint is superior to constant `0.01` actuation.
+The observed direction instead favours the constant controller. This negative
+confirmatory result must remain distinct from subsequent exploratory
+diagnostics.
+
+### Physical consistency
+
+The result is not an artefact of reward aggregation. Across the ten pairs, the
+mean first-wall heat flux was `0.0165809` under feedback and `0.0163652` under
+constant actuation. Feedback therefore produced approximately `1.32%` more
+first-wall heat flux on average and was worse on this quantity in eight pairs.
+The exact paired sign-flip test on mean flux gave `p = 0.1719`. Paired return
+and first-wall-flux differences had correlation `-0.9998`, confirming that the
+implemented reward represents the intended routing objective.
+
+Feedback nevertheless increased global convection: relative to the constant
+controller it produced higher mean `Nu` and `Kbar`, and lower `Tbar`, in all
+ten pairs, while total heating power was unchanged. The failure is therefore
+specific to heat routing. The policy drives stronger transport but, over the
+full horizon, directs more heat toward the plasma-facing wall.
+
+### Dependence on episode phase
+
+The paired result changes qualitatively with control time:
+
+| Cumulative horizon | Mean paired return difference | Feedback wins |
+|---:|---:|---:|
+| 100 | +0.373 | 9 of 10 |
+| 200 | +0.987 | 8 of 10 |
+| 400 | +0.023 | 5 of 10 |
+| 600 | -1.407 | 5 of 10 |
+| 800 | -4.219 | 3 of 10 |
+| 1000 | -4.094 | 2 of 10 |
+
+Feedback is consequently useful during the initial transient but fails to
+maintain its advantage after its own actuation reorganizes the flow. In the
+`601--700` block it underperformed the constant controller on all ten restart
+fields. Short-horizon evaluation would therefore have produced a misleadingly
+favourable conclusion.
+
+### Nature of the learned action
+
+The policy is state-dependent but acts predominantly through a spatially
+uniform mode. Over the complete campaign:
+
+- the pooled mean action was `0.01098`, close to the constant `0.01` baseline;
+- mean spatial standard deviation across the ten electrodes was `0.000627`;
+- mean pairwise electrode correlation was `0.990`;
+- all ten actions shared one sign during `97.3%` of transitions;
+- lag-one action correlation was approximately `0.999`;
+- no action approached its clipping bound.
+
+This is not one fixed open-loop schedule. Temporal action histories from
+different restart fields had mean pairwise correlation `-0.011`, and
+snapshot-specific temporal variance was about 10.7 times the variance of the
+cross-snapshot mean schedule. The most precise interpretation is that the
+policy learned state-dependent modulation of an almost uniform, slowly varying
+electrode mode rather than strong spatially localized feedback.
+
+### Working diagnosis for subsequent training
+
+The physical episode length during training was 1000 transitions, but PPO
+collected and updated after 256-transition rollouts. Thus one CFD episode
+spanned approximately four policy updates. The agent did encounter mature
+controlled states, but direct recurrent backpropagation and sampled advantage
+estimation were confined to rollout segments; delayed effects across a
+boundary depended on value-function bootstrapping. The poor explained
+variance observed during training makes that bootstrap an important likely
+failure point. Moreover, the deployed policy was frozen for all 1000 test
+steps, whereas the policy parameters changed several times within a training
+episode.
+
+The loss of evaluation advantage around the first 200--400 transitions is
+consistent with this rollout-horizon limitation. It is not yet proof of
+causation, but it motivates the next controlled experiment: retain the same
+physical objective and 1000-transition episode while collecting a complete
+episode before each PPO update. The purpose is to preserve the useful initial
+response while exposing the value learner directly to the adverse long-time
+flow reorganization. Exact optimizer and memory settings should be fixed in a
+new experiment configuration before that run begins.
+
+Raw campaign artefacts are intentionally untracked under
+`evaluation_runs/feedback_vs_constant_275k/`; the frozen plan, per-transition
+trajectories, summaries, and primary `analysis.json` provide the local audit
+record.
+
 ## Outstanding confirmation
 
 The FinerGrid controlled run should be allowed to complete through `t = 400`
