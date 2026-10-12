@@ -1,0 +1,12 @@
+launcher:
+  # The batch allocation already owns the node and all four GPUs. SmartSim's
+  # local launcher gives each worker a deterministic CUDA_VISIBLE_DEVICES.
+  type: local
+  cpus_per_simulation: 1
+  simulations_per_gpu: 1
+  gpu_resource: gpu:1
+
+smartsim:
+  interface: lo
+  port: 16780
+

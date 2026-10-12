@@ -94,6 +94,12 @@ def test_static_solver_python_contract():
     assert 'randomAction = false' in par
     assert 'xMinusIntegratedHeatFlux' in env
     assert 'xMinusIntegratedHeatFlux' in udf
+    for field in (
+        'xPlusIntegratedHeatFlux', 'yMinusIntegratedHeatFlux',
+        'yPlusIntegratedHeatFlux',
+    ):
+        assert field in env
+        assert field in udf
     assert 'totalHeatingPower' in env
     assert 'totalHeatingPower' in udf
     assert 'MPI_Allgatherv' in udf

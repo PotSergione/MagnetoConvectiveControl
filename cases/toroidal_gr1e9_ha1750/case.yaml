@@ -22,3 +22,6 @@ interface:
   wall_shape: [128, 160]
   observation_channels: [y_minus, y_plus, x_plus]
   reward_inputs: [x_minus_integrated_heat_flux, total_heating_power]
+  diagnostic_integrals:
+    [x_minus_integrated_heat_flux, x_plus_integrated_heat_flux,
+     y_minus_integrated_heat_flux, y_plus_integrated_heat_flux]

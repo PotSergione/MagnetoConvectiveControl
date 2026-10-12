@@ -1,0 +1,50 @@
+schema_version: 1
+
+run:
+  name: four_gpu_control_design_v1
+  artifact_root: runs
+
+case:
+  name: toroidal_gr1e9_ha1750
+  executable: cases/toroidal_gr1e9_ha1750/run_case.sh
+
+data:
+  # Override with MCC_DESIGN_SNAPSHOTS_DIR on CSF3. The directory must contain
+  # exactly eight canonical blanket0.fNNNNN design fields, or list eight names.
+  snapshots: data/design_snapshots
+  snapshot_names: []
+
+campaign:
+  seed: 5489
+  design_snapshots: 8
+  transitions: 1000
+  control_interval: 0.1
+  safe_action_range: [-0.03, 0.03]
+  raw_chunk_steps: 25
+  startup_timeout: 900
+  allocation_hours: 48
+  reserve_hours: 5
+
+reward:
+  type: first_wall_ewma
+  reference_flux: 0.0166913
+  ewma_timescale: 10.0
+  scale: 1.0
+
+stage_a:
+  uniform_actions: [-0.01, 0.0, 0.01, 0.02]
+
+stage_b:
+  target_perturbation_rms: 0.005
+  warmup_steps: 100
+  excitation_steps: 500
+  maximum_impulse_lag: 400
+
+stage_c:
+  rollouts: 10
+  batch_size: 400
+  epochs: 5
+  learning_rate: 1.0e-4
+  lstm_hidden_size: 128
+  maximum_mean_kl: 0.05
+

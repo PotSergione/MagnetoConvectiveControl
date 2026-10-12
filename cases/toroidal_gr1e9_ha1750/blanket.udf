@@ -188,7 +188,7 @@ static void userScalarSource(double time)
   internalHeating(mesh->Nelements, thermalSourceCoeff, mesh->o_x, cds->o_NLT);
 }
 
-static dfloat integratedXMinusHeatFlux()
+static std::array<dfloat, 4> integratedWallHeatFluxes()
 {
   auto mesh = nrs->mesh;
   const dlong N = mesh->Nlocal;
@@ -204,16 +204,20 @@ static dfloat integratedXMinusHeatFlux()
   // Boundary IDs are 1=x-, 2=x+, 3=y-, and 4=y+.  NekRS supplies the
   // outward normal and surface GLL weights.  Multiplication by -kappa gives
   // outward conductive heat flow, positive when heat leaves the fluid.
-  static deviceMemory<int> o_xMinusBoundary;
-  if (!o_xMinusBoundary.isInitialized()) {
-    o_xMinusBoundary.resize(1);
-    o_xMinusBoundary.copyFrom(std::vector<int>{1});
+  static deviceMemory<int> o_wallBoundaries;
+  if (!o_wallBoundaries.isInitialized()) {
+    o_wallBoundaries.resize(4);
+    o_wallBoundaries.copyFrom(std::vector<int>{1, 2, 3, 4});
   }
 
-  const dfloat fluxXMinus =
-    -thermalSourceCoeff *
-    mesh->surfaceAreaNormalMultiplyIntegrate(offset, 1, o_xMinusBoundary, o_gradT).at(0);
-  return fluxXMinus;
+  const auto integrals =
+    mesh->surfaceAreaNormalMultiplyIntegrate(offset, 4, o_wallBoundaries, o_gradT);
+  return {
+    -thermalSourceCoeff * integrals.at(0),
+    -thermalSourceCoeff * integrals.at(1),
+    -thermalSourceCoeff * integrals.at(2),
+    -thermalSourceCoeff * integrals.at(3),
+  };
 }
 
 struct ObservedWallData
@@ -300,7 +304,7 @@ static void publishToRedis(double time, int tstep)
 {
   auto mesh = nrs->mesh;
   const auto walls = observedWallHeatFluxFields();
-  const dfloat xMinusHeatFlux = integratedXMinusHeatFlux();
+  const auto integratedWallHeatFlux = integratedWallHeatFluxes();
   static constexpr std::array<const char *, 3> wallNames = {
     "yMinus", "yPlus", "xPlus"
   };
@@ -349,7 +353,16 @@ static void publishToRedis(double time, int tstep)
   redisClient->put_tensor(redisKey("Kbar"), &kineticEnergy, {1}, fieldType,
                           SRMemLayoutContiguous);
   redisClient->put_tensor(redisKey("xMinusIntegratedHeatFlux"),
-                          &xMinusHeatFlux, {1}, fieldType,
+                          &integratedWallHeatFlux[0], {1}, fieldType,
+                          SRMemLayoutContiguous);
+  redisClient->put_tensor(redisKey("xPlusIntegratedHeatFlux"),
+                          &integratedWallHeatFlux[1], {1}, fieldType,
+                          SRMemLayoutContiguous);
+  redisClient->put_tensor(redisKey("yMinusIntegratedHeatFlux"),
+                          &integratedWallHeatFlux[2], {1}, fieldType,
+                          SRMemLayoutContiguous);
+  redisClient->put_tensor(redisKey("yPlusIntegratedHeatFlux"),
+                          &integratedWallHeatFlux[3], {1}, fieldType,
                           SRMemLayoutContiguous);
   redisClient->put_tensor(redisKey("totalHeatingPower"), &totalHeatingPower,
                           {1}, fieldType, SRMemLayoutContiguous);

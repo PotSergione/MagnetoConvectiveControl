@@ -32,6 +32,9 @@ DEFAULT_OBSERVATION_FIELDS = (
     "Tbar",
     "Kbar",
     "xMinusIntegratedHeatFlux",
+    "xPlusIntegratedHeatFlux",
+    "yMinusIntegratedHeatFlux",
+    "yPlusIntegratedHeatFlux",
     "totalHeatingPower",
 )
 WALL_CHANNELS = ("yMinus", "yPlus", "xPlus")
@@ -52,6 +55,9 @@ MODEL_TENSOR_KEYS = (
     RANK_ZERO_PREFIX + "Tbar",
     RANK_ZERO_PREFIX + "Kbar",
     RANK_ZERO_PREFIX + "xMinusIntegratedHeatFlux",
+    RANK_ZERO_PREFIX + "xPlusIntegratedHeatFlux",
+    RANK_ZERO_PREFIX + "yMinusIntegratedHeatFlux",
+    RANK_ZERO_PREFIX + "yPlusIntegratedHeatFlux",
     RANK_ZERO_PREFIX + "totalHeatingPower",
     RANK_ZERO_PREFIX + "step",
     RANK_ZERO_PREFIX + "time",
@@ -239,6 +245,11 @@ class SmartSimVecEnv:
         simulation_failure_penalty: float = 0.0,
         max_failure_restarts: int = 3,
         snapshot_path: str | None = None,
+        snapshot_schedules: Sequence[Sequence[str]] | None = None,
+        observation_scaling: str = "per_frame",
+        fixed_wall_mean: float | None = None,
+        fixed_wall_std: float | None = None,
+        episode_horizon_truncated: bool = True,
     ):
         if n_envs < 1:
             raise ValueError("n_envs must be positive")
@@ -307,12 +318,31 @@ class SmartSimVecEnv:
             self.initial_policy_action
         )
         self.max_episode_steps = max_episode_steps
+        self.episode_horizon_truncated = bool(episode_horizon_truncated)
+        if observation_scaling not in {"per_frame", "fixed"}:
+            raise ValueError("observation_scaling must be 'per_frame' or 'fixed'")
+        if observation_scaling == "fixed":
+            if (
+                fixed_wall_mean is None
+                or fixed_wall_std is None
+                or not np.isfinite(fixed_wall_mean)
+                or not np.isfinite(fixed_wall_std)
+                or fixed_wall_std <= 0
+            ):
+                raise ValueError("fixed observation scaling requires a finite mean and positive std")
+        self.observation_scaling = observation_scaling
+        self.fixed_wall_mean = fixed_wall_mean
+        self.fixed_wall_std = fixed_wall_std
         self.simulation_failure_penalty = float(simulation_failure_penalty)
         self.max_failure_restarts = max_failure_restarts
         self.sim_executable = str(executable)
 
-        if snapshot_path is not None and snapshots_dir is not None:
-            raise ValueError("Specify snapshot_path or snapshots_dir, not both")
+        if snapshot_schedules is not None and (
+            snapshot_path is not None or snapshots_dir is not None
+        ):
+            raise ValueError(
+                "Specify snapshot_schedules, snapshot_path, or snapshots_dir, not more than one"
+            )
         self.snapshot_path = (
             Path(snapshot_path).expanduser().resolve()
             if snapshot_path is not None
@@ -329,7 +359,7 @@ class SmartSimVecEnv:
                     f"{self.snapshot_path.name}"
                 )
             self.snapshots_dir = None
-        else:
+        elif snapshot_schedules is None:
             snapshot_directory = (
                 Path(__file__).resolve().parent / "snapshots"
                 if snapshots_dir is None
@@ -340,6 +370,29 @@ class SmartSimVecEnv:
                     f"Snapshot directory not found: {snapshot_directory}"
                 )
             self.snapshots_dir = snapshot_directory
+        else:
+            if len(snapshot_schedules) != n_envs:
+                raise ValueError(
+                    "snapshot_schedules must contain one schedule per environment"
+                )
+            resolved_schedules = []
+            for env_id, schedule in enumerate(snapshot_schedules):
+                paths = tuple(Path(item).expanduser().resolve() for item in schedule)
+                if not paths:
+                    raise ValueError(f"Snapshot schedule {env_id} is empty")
+                for path in paths:
+                    if not path.is_file():
+                        raise FileNotFoundError(path)
+                    if re.fullmatch(r"blanket0\.f\d+", path.name) is None:
+                        raise ValueError(
+                            f"Noncanonical snapshot in schedule {env_id}: {path.name}"
+                        )
+                resolved_schedules.append(paths)
+            self.snapshots_dir = None
+            self._snapshot_schedules = tuple(resolved_schedules)
+        if snapshot_schedules is None:
+            self._snapshot_schedules = None
+        self._snapshot_schedule_indices = [0] * n_envs
         self._snapshot_rng = random.SystemRandom()
         self._snapshot_queue: list[Path] = []
         if (
@@ -381,6 +434,10 @@ class SmartSimVecEnv:
         self._last_nu = np.full(n_envs, np.nan, dtype=np.float64)
         self._last_first_wall_flux = np.full(n_envs, np.nan, dtype=np.float64)
         self._last_total_heating_power = np.full(n_envs, np.nan, dtype=np.float64)
+        self._last_wall_fluxes = np.full((n_envs, 4), np.nan, dtype=np.float64)
+        self._last_times = np.full(n_envs, np.nan, dtype=np.float64)
+        self._last_solver_steps = np.full(n_envs, -1, dtype=np.int64)
+        self._last_raw_wall_maps: list[np.ndarray | None] = [None] * n_envs
         self._last_tbar = np.full(n_envs, np.nan, dtype=np.float64)
         self._last_kbar = np.full(n_envs, np.nan, dtype=np.float64)
         self._last_reward_components: list[dict[str, float]] = [
@@ -498,7 +555,7 @@ class SmartSimVecEnv:
         """Generate and start one isolated case on its assigned GPU."""
         model_name = self._model_name(env_id)
         gpu_id = self._gpu_id(env_id)
-        snapshot = self._select_snapshot()
+        snapshot = self._select_snapshot(env_id)
         env_vars = {
             # SSKEYIN makes the UDF read this model's prefixed action.
             # SmartSim supplies SSDB and, via enable_key_prefixing, SSKEYOUT.
@@ -570,6 +627,10 @@ class SmartSimVecEnv:
         self._last_nu[env_id] = np.nan
         self._last_first_wall_flux[env_id] = np.nan
         self._last_total_heating_power[env_id] = np.nan
+        self._last_wall_fluxes[env_id] = np.nan
+        self._last_times[env_id] = np.nan
+        self._last_solver_steps[env_id] = -1
+        self._last_raw_wall_maps[env_id] = None
         self._last_tbar[env_id] = np.nan
         self._last_kbar[env_id] = np.nan
         self._last_reward_components[env_id] = {}
@@ -586,8 +647,13 @@ class SmartSimVecEnv:
         )
         self.exp.start(model, block=False, summary=False)
 
-    def _select_snapshot(self) -> Path:
+    def _select_snapshot(self, env_id: int = 0) -> Path:
         """Draw checkpoints from a shuffled cycle before reusing any one."""
+        if getattr(self, "_snapshot_schedules", None) is not None:
+            schedule = self._snapshot_schedules[env_id]
+            index = self._snapshot_schedule_indices[env_id]
+            self._snapshot_schedule_indices[env_id] += 1
+            return schedule[index % len(schedule)]
         if self.snapshot_path is not None:
             return self.snapshot_path
         assert self.snapshots_dir is not None
@@ -706,8 +772,12 @@ class SmartSimVecEnv:
         wall_maps = np.asarray(wall_maps, dtype=np.float64)
         if not np.all(np.isfinite(wall_maps)):
             raise ValueError("Heat-flux observation contains non-finite values")
-        mean = float(wall_maps.mean())
-        standard_deviation = float(wall_maps.std())
+        if getattr(self, "observation_scaling", "per_frame") == "fixed":
+            mean = float(self.fixed_wall_mean)
+            standard_deviation = float(self.fixed_wall_std)
+        else:
+            mean = float(wall_maps.mean())
+            standard_deviation = float(wall_maps.std())
         scale = max(standard_deviation, 1e-8)
         return np.ascontiguousarray((wall_maps - mean) / scale, dtype=np.float32)
 
@@ -754,11 +824,15 @@ class SmartSimVecEnv:
     def _read_frame(self, env_id: int, wait_for_new: bool) -> tuple[np.ndarray, float]:
         """Read a consistent wall frame and compute its local physical reward."""
         step_key = self._frame_key(env_id, "step")
-        self._block_until_exists(step_key, self.startup_timeout)
+        time_key = self._frame_key(env_id, "time")
+        # ``time`` is the UDF's commit marker and is published after every
+        # field, action sequence, and solver step belonging to the frame.
+        self._block_until_exists(time_key, self.startup_timeout)
 
         while True:
+            committed_time = float(self.client.get_tensor(time_key).reshape(-1)[0])
             step = int(self.client.get_tensor(step_key).reshape(-1)[0])
-            if wait_for_new and step == self._last_steps[env_id]:
+            if wait_for_new and committed_time == self._last_times[env_id]:
                 self._check_model_alive(env_id)
                 time.sleep(self.poll_interval)
                 continue
@@ -773,13 +847,23 @@ class SmartSimVecEnv:
             total_heating_power = float(self.client.get_tensor(
                 self._frame_key(env_id, "totalHeatingPower")
             ).reshape(-1)[0])
+            wall_fluxes = np.asarray([
+                self.client.get_tensor(
+                    self._frame_key(env_id, name + "IntegratedHeatFlux")
+                ).reshape(-1)[0]
+                for name in ("xMinus", "xPlus", "yMinus", "yPlus")
+            ], dtype=np.float64)
+            physical_time = committed_time
             actions = np.asarray(self.client.get_tensor(
                 self._frame_key(env_id, "timeIntensity")), dtype=np.float64).reshape(-1)
             action_sequence = int(self.client.get_tensor(
                 self._frame_key(env_id, "actionSequence")).reshape(-1)[0])
-            # The UDF writes step/time only after the fields.  Re-read step to
-            # reject a mixture if another frame arrived during the large reads.
-            if int(self.client.get_tensor(step_key).reshape(-1)[0]) != step:
+            # Re-read both commit marker and step to reject a mixture if a new
+            # frame arrived during the relatively large wall-field reads.
+            if (
+                float(self.client.get_tensor(time_key).reshape(-1)[0]) != committed_time
+                or int(self.client.get_tensor(step_key).reshape(-1)[0]) != step
+            ):
                 continue
 
             observation = self._prepare_observation(wall_maps)
@@ -809,6 +893,12 @@ class SmartSimVecEnv:
             self._last_nu[env_id], self._last_tbar[env_id], self._last_kbar[env_id] = nu, tbar, kbar
             self._last_first_wall_flux[env_id] = first_wall_heat_flux
             self._last_total_heating_power[env_id] = total_heating_power
+            self._last_wall_fluxes[env_id] = wall_fluxes
+            self._last_times[env_id] = physical_time
+            self._last_solver_steps[env_id] = step
+            self._last_raw_wall_maps[env_id] = np.ascontiguousarray(
+                wall_maps, dtype=np.float32
+            )
             if observation.size != self.obs_dim:
                 raise ValueError(
                     f"Environment {env_id} reconstructed {observation.size} observation "
@@ -1051,7 +1141,14 @@ class SmartSimVecEnv:
                      "Nu": float(self._last_nu[env_id]),
                      "action_sequence": int(self._action_sequences[env_id]),
                      "episode_step": int(self._episode_steps[env_id]),
-                     "snapshot": str(self._episode_snapshots[env_id])}
+                     "snapshot": str(self._episode_snapshots[env_id]),
+                     "solver_step": int(self._last_solver_steps[env_id]),
+                     "physical_time": float(self._last_times[env_id]),
+                     "x_plus_integrated_heat_flux": float(self._last_wall_fluxes[env_id, 1]),
+                     "y_minus_integrated_heat_flux": float(self._last_wall_fluxes[env_id, 2]),
+                     "y_plus_integrated_heat_flux": float(self._last_wall_fluxes[env_id, 3]),
+                     "allocation_gpu": int(self._gpu_id(env_id)),
+                     "applied_physical_action": self._last_actions[env_id].copy()}
                 )
 
                 horizon_reached = (
@@ -1063,7 +1160,10 @@ class SmartSimVecEnv:
                     dones[env_id] = True
                     infos[env_id] = {
                         "terminal_observation": observation.copy(),
-                        "TimeLimit.truncated": True,
+                        "terminal_raw_wall_maps": self._last_raw_wall_maps[
+                            env_id
+                        ].copy(),
+                        "TimeLimit.truncated": self.episode_horizon_truncated,
                         "episode_end_reason": "max_episode_steps",
                         "terminal_physical_action": self._last_actions[
                             env_id

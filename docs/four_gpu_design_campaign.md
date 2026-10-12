@@ -382,3 +382,27 @@ The campaign is complete only when it produces:
 - a generated, frozen configuration for the long run, or an explicit no-go
   decision.
 
+## Executable workflow
+
+The implementation is exposed as one restartable command:
+
+```bash
+mcc-campaign \
+  --campaign configs/campaigns/four_gpu_design.yaml \
+  --machine configs/machines/csf3_four_gpu.yaml
+```
+
+On CSF3 it is submitted through `cluster/slurm/four_gpu_campaign.slurm`. The
+workflow freezes `plan.json`, runs a four-environment smoke test, advances
+through the Stage A and B analysis barriers, generates the Stage C design, and
+writes `campaign_result.json`. An unresolved action-conditioned signal at the
+Stage B barrier is a completed no-go outcome and prevents speculative PPO.
+
+Stage C uses four centralized recurrent policies acting in the retained real
+Fourier coordinates. It therefore presents four independent physical rows to
+SB3 rather than forty rows formed by multiplying each trajectory by ten cyclic
+views. The ten electrode voltages are reconstructed deterministically from the
+selected modal coefficients. Per-transition tables retain both coordinate
+systems, while PPO tables retain sampled and deterministic actions, action
+standard deviations, log probabilities, values, returns, advantages, and
+episode-start flags.
