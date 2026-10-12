@@ -461,6 +461,12 @@ planned.
 
 ## Evaluation criteria
 
+The pre-production control-design and learnability study is specified in
+[`four_gpu_design_campaign.md`](four_gpu_design_campaign.md). It uses one
+staged four-GPU campaign to identify the action basis and physical timescales,
+test observation sufficiency, and apply a short multi-environment PPO go/no-go
+gate before any substantially longer training run.
+
 Training reward is not sufficient evidence of success. Evaluate deterministic
 policies on held-out stationary snapshots and compare them with:
 
