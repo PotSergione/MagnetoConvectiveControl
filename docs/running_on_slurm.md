@@ -70,7 +70,7 @@ cd "$HOME/MagnetoConvectiveControl"
 git pull --ff-only
 
 export MCC_STORAGE_ROOT=/nobackup/projects/PROJECT/USER
-ghbatch cluster/slurm/bede_stack_smoke.slurm
+ghbatch -A PROJECT cluster/slurm/bede_stack_smoke.slurm
 ```
 
 `MCC_STORAGE_ROOT` is the only required site-private value. The script derives
@@ -83,3 +83,31 @@ The job preserves all generated files on failure. After success it removes only
 its job-local SmartSim case copies and TensorBoard events, retaining compact
 configuration, metadata, reward metrics and the reload-validated PPO checkpoint
 under `MCC_STORAGE_ROOT/smoke/mcc-stack-JOBID/artifacts/bede_stack_smoke`.
+
+### Two-node/two-GPU integration smoke
+
+The two-GPU Bede launcher requests one GH200 on each of two nodes. Inside the
+allocation it resolves the peer node, asks the controller node's routing table
+which interface reaches that peer, verifies that interface and one GPU on both
+nodes, and exports the interface to SmartSim. No interactive compute-node login
+or hardcoded network-device name is required.
+
+Queue it behind a one-GPU smoke test so that it consumes two nodes only after
+the foundational test passes:
+
+```bash
+cd "$HOME/MagnetoConvectiveControl"
+git pull --ff-only
+
+export MCC_STORAGE_ROOT=/nobackup/projects/PROJECT/USER
+ghbatch -A PROJECT \
+  --dependency=afterok:ONE_GPU_JOB_ID \
+  cluster/slurm/bede_two_gpu_stack_smoke.slurm
+```
+
+This job uses Bede's `ghtest` partition and its 30-minute test limit. It runs
+two independent NekMHD workers, collects two physical transitions from each,
+performs one 40-sample PPO update, and reload-validates the final checkpoint.
+The selected route and interface are recorded in Slurm output. Compact results
+remain under
+`MCC_STORAGE_ROOT/smoke/mcc-2gpu-stack-JOBID/artifacts/bede_two_gpu_stack_smoke`.

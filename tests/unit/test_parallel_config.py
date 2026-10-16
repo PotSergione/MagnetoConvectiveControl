@@ -150,3 +150,26 @@ def test_bede_stack_smoke_is_one_gpu_one_update():
         "learning_rate": 1.0e-4,
     }
     assert config["training"]["total_timesteps"] == 20
+
+
+def test_bede_two_gpu_stack_smoke_is_multi_node_one_update(monkeypatch):
+    monkeypatch.setenv("SMARTSIM_INTERFACE", "fabric0")
+    config = compose(
+        PROJECT_ROOT / "configs/experiments/stack_smoke_two_gpu.yaml",
+        PROJECT_ROOT,
+        PROJECT_ROOT / "configs/machines/bede_two_gpu_stack_smoke.yaml",
+        PROJECT_ROOT / "configs/scales/two_gpu.yaml",
+    )
+    plan = parallel_plan(config)
+
+    assert plan.physical_environments == 2
+    assert plan.required_gpus == 2
+    assert plan.nodes == 2
+    assert "smartsim" not in config
+    assert config["ppo"] == {
+        "rollout_steps": 2,
+        "batch_size": 40,
+        "epochs": 1,
+        "learning_rate": 1.0e-4,
+    }
+    assert config["training"]["total_timesteps"] == 40

@@ -36,3 +36,9 @@ launcher defaults to the CSF3 `nekrs-smartsim` Conda environment, sources
 
 `train.slurm` runs the Python controller directly in the batch shell. Do not
 wrap it in an outer `srun`: SmartSim owns the database and simulation job steps.
+
+The Bede-specific one- and two-GPU stack checks are
+`bede_stack_smoke.slurm` and `bede_two_gpu_stack_smoke.slurm`. The latter uses
+two GH nodes and discovers its SmartSim interface from the kernel route between
+them; it does not assume a site-specific network-device name. See
+`docs/running_on_slurm.md` for submission and dependency examples.

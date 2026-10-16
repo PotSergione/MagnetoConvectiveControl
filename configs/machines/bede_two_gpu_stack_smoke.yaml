@@ -1,0 +1,10 @@
+launcher:
+  type: slurm
+  cpus_per_simulation: 4
+  simulations_per_gpu: 1
+  gpu_resource: gpu:1
+
+# The batch launcher discovers and exports SMARTSIM_INTERFACE from the route
+# between its allocated nodes. Do not hardcode a Linux interface name here.
+runtime:
+  startup_timeout: 1200
