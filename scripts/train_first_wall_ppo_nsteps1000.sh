@@ -54,10 +54,6 @@ export LD_LIBRARY_PATH="${runtime_library_dir}${LD_LIBRARY_PATH:+:${LD_LIBRARY_P
 
 export SMARTSIM_INTERFACE="${SMARTSIM_INTERFACE:-lo}"
 export SMARTSIM_PORT="${SMARTSIM_PORT:-16780}"
-export RL_LAUNCHER=local
-export RL_N_ENVS=1
-export RL_SIMULATIONS_PER_GPU=1
-export RL_CPUS_PER_SIMULATION=1
 export RL_SNAPSHOTS_DIR="${RL_SNAPSHOTS_DIR:-${HOME}/nekMHD/research_tests/fusionB/rl/snapshots}"
 export MCC_ARTIFACT_ROOT="${MCC_ARTIFACT_ROOT:-${root}/runs}"
 export RL_SIM_EXECUTABLE="${root}/cases/toroidal_gr1e9_ha1750/run_case.sh"
@@ -81,6 +77,8 @@ export RL_MAX_EPISODE_STEPS=1000
 run_name="${RL_MODEL_NAME}"
 run_directory="${MCC_ARTIFACT_ROOT}/${run_name}"
 experiment="${root}/configs/experiments/first_wall_ppo_nsteps1000.yaml"
+machine="${MCC_MACHINE_CONFIG:-${root}/configs/machines/local.yaml}"
+scale="${MCC_SCALE_CONFIG:-${root}/configs/scales/one_gpu.yaml}"
 
 if [[ "${1:-}" == "--dry-run" ]]; then
     [[ -x "${RL_SIM_EXECUTABLE}" ]] || {
@@ -97,7 +95,9 @@ if [[ "${1:-}" == "--dry-run" ]]; then
     echo "Snapshots:         ${RL_SNAPSHOTS_DIR} (${snapshot_count})"
     echo "Artifacts:         ${run_directory}"
     echo "Rollout/episode:   ${RL_N_STEPS}/${RL_MAX_EPISODE_STEPS} physical steps"
-    echo "Samples/update:    $((RL_N_STEPS * 10))"
+    echo "Machine:           ${machine}"
+    echo "Scale:             ${scale}"
+    echo "Samples/update:    configured by experiment and scale"
     echo "Batch/epochs/LR:   ${RL_BATCH_SIZE}/${RL_N_EPOCHS}/${RL_LEARNING_RATE}"
     echo "Total SB3 samples: ${RL_TOTAL_TIMESTEPS}"
     exit 0
@@ -117,5 +117,8 @@ git rev-parse HEAD > "${run_directory}/git_revision.txt"
 echo "Launching from-scratch 1000-step-rollout training"
 echo "Artifacts: ${run_directory}"
 echo "Log:       ${run_directory}/training.log"
-exec python -u -m magnetoconvective_control.training.train \
+exec python -u -m magnetoconvective_control.cli.train \
+    --experiment "${experiment}" \
+    --machine "${machine}" \
+    --scale "${scale}" \
     > "${run_directory}/training.log" 2>&1

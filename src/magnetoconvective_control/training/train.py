@@ -9,6 +9,7 @@ import re
 import signal
 from collections import deque
 from datetime import datetime, timezone
+from math import ceil
 from pathlib import Path
 
 import gymnasium as gym
@@ -24,6 +25,7 @@ from ..policies.cnn_lstm import CNNFeatureExtractor
 # Cluster settings may be overridden without editing this file.
 N_ENVS = int(os.environ.get("RL_N_ENVS", "1"))
 SIMULATIONS_PER_GPU = int(os.environ.get("RL_SIMULATIONS_PER_GPU", "1"))
+GPUS_PER_NODE = int(os.environ.get("RL_GPUS_PER_NODE", "1"))
 BATCH_SIZE = int(os.environ.get("RL_BATCH_SIZE", "256"))
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_CASE_DIRECTORY = PROJECT_ROOT / "cases" / "toroidal_gr1e9_ha1750"
@@ -69,6 +71,9 @@ SNAPSHOTS_DIRECTORY = Path(
 ).expanduser().resolve()
 
 DATABASE_INTERFACE = os.environ.get("SMARTSIM_INTERFACE", "lo")
+STARTUP_TIMEOUT = float(os.environ.get("RL_STARTUP_TIMEOUT", "1200"))
+OCCA_CACHE_DIRECTORY = os.environ.get("RL_OCCA_CACHE_DIR")
+NEKRS_CACHE_DIRECTORY = os.environ.get("RL_NEKRS_CACHE_DIR")
 DATABASE_PORT = int(
     os.environ.get(
         "SMARTSIM_PORT",
@@ -106,6 +111,16 @@ class TrainingCheckpointCallback(BaseCallback):
         "episode_reward_mean",
         "episode_reward_std",
     )
+    EPISODE_FIELDS = (
+        "timestamp_utc",
+        "run_id",
+        "env_id",
+        "episode_id",
+        "snapshot",
+        "physical_steps",
+        "episode_return",
+        "end_reason",
+    )
 
     def __init__(
         self,
@@ -122,6 +137,7 @@ class TrainingCheckpointCallback(BaseCallback):
         self.checkpoint_directory = model_directory / "checkpoints"
         self.latest_path = model_directory / "latest.zip"
         self.metrics_path = model_directory / "reward_metrics.csv"
+        self.episode_metrics_path = model_directory / "episode_metrics.csv"
         self.checkpoint_interval = checkpoint_interval
         self.metrics_interval = metrics_interval
         self.rewards: deque[float] = deque(maxlen=reward_window)
@@ -166,6 +182,7 @@ class TrainingCheckpointCallback(BaseCallback):
     def _on_step(self) -> bool:
         rewards = np.asarray(self.locals["rewards"], dtype=float).reshape(-1)
         dones = np.asarray(self.locals["dones"], dtype=bool).reshape(-1)
+        infos = self.locals.get("infos", [{} for _ in range(rewards.size)])
         if rewards.size % ACT_DIM != 0:
             raise RuntimeError("MARL rows are not divisible into ten-agent groups")
         grouped_dones = dones.reshape(-1, ACT_DIM)
@@ -182,7 +199,10 @@ class TrainingCheckpointCallback(BaseCallback):
         # each physical completion once, using its first symmetry-related row.
         for group_index in np.flatnonzero(grouped_dones[:, 0]):
             index = group_index * ACT_DIM
-            self.episode_rewards.append(self.running_episode_rewards[index])
+            episode_return = float(self.running_episode_rewards[index])
+            self.episode_rewards.append(episode_return)
+            info = infos[index] if index < len(infos) else {}
+            self._append_episode_metric(group_index, episode_return, info)
             self.running_episode_rewards[index:index + ACT_DIM] = 0.0
             self.completed_episodes += 1
 
@@ -197,6 +217,30 @@ class TrainingCheckpointCallback(BaseCallback):
             while self.next_checkpoint <= timesteps:
                 self.next_checkpoint += self.checkpoint_interval
         return True
+
+    def _append_episode_metric(
+        self, env_id: int, episode_return: float, info: dict
+    ) -> None:
+        """Persist one compact row per physical episode."""
+        row = {
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "run_id": self.run_id,
+            "env_id": info.get("env_id", env_id),
+            "episode_id": info.get("episode_id"),
+            "snapshot": info.get("snapshot"),
+            "physical_steps": info.get("episode_step"),
+            "episode_return": episode_return,
+            "end_reason": info.get("episode_end_reason", "unknown"),
+        }
+        new_file = (
+            not self.episode_metrics_path.exists()
+            or self.episode_metrics_path.stat().st_size == 0
+        )
+        with self.episode_metrics_path.open("a", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=self.EPISODE_FIELDS)
+            if new_file:
+                writer.writeheader()
+            writer.writerow(row)
 
     def _write_metrics(self, timesteps: int) -> None:
         reward_values = np.asarray(self.rewards, dtype=float)
@@ -272,8 +316,33 @@ def _raise_on_termination(signum, _frame) -> None:
 
 
 def main() -> None:
-    if N_ENVS != 1:
-        raise ValueError("This setup is defined for one sequential physical environment")
+    if N_ENVS < 1:
+        raise ValueError("RL_N_ENVS must be positive")
+    if SIMULATIONS_PER_GPU < 1:
+        raise ValueError("RL_SIMULATIONS_PER_GPU must be positive")
+    if GPUS_PER_NODE < 1:
+        raise ValueError("RL_GPUS_PER_NODE must be positive")
+    if STARTUP_TIMEOUT <= 0:
+        raise ValueError("RL_STARTUP_TIMEOUT must be positive")
+    allocated_nodes = int(os.environ.get("SLURM_JOB_NUM_NODES", "1"))
+    required_gpus = ceil(N_ENVS / SIMULATIONS_PER_GPU)
+    if (
+        LAUNCHER.lower() == "slurm"
+        and required_gpus > allocated_nodes * GPUS_PER_NODE
+    ):
+        raise ValueError(
+            f"The active Slurm allocation provides at most "
+            f"{allocated_nodes * GPUS_PER_NODE} GPUs, but {required_gpus} are required"
+        )
+    if (
+        LAUNCHER.lower() == "slurm"
+        and allocated_nodes > 1
+        and DATABASE_INTERFACE == "lo"
+    ):
+        raise ValueError(
+            "Multi-node SmartSim cannot use loopback for its database; set "
+            "SMARTSIM_INTERFACE to a routable compute-node interface"
+        )
     snapshot_files = sorted(
         path for path in SNAPSHOTS_DIRECTORY.iterdir() if path.is_file()
     )
@@ -355,6 +424,11 @@ def main() -> None:
         f"Action mapping: physical=clip({ACTION_BASELINE:g} + "
         f"{ACTION_SCALE:g} * policy, -0.25, 0.25)"
     )
+    print(
+        f"Parallel rollout: {N_ENVS} physical environments, "
+        f"{N_ENVS * N_STEPS} physical transitions/update, "
+        f"{rollout_samples} virtual-agent samples/update"
+    )
 
     observation_space = gym.spaces.Dict(
         {
@@ -396,9 +470,11 @@ def main() -> None:
             cpus_per_simulation=CPUS_PER_SIMULATION,
             max_episode_steps=MAX_EPISODE_STEPS,
             snapshots_dir=str(SNAPSHOTS_DIRECTORY),
-            startup_timeout=500.0,
+            startup_timeout=STARTUP_TIMEOUT,
             database_port=DATABASE_PORT,
             database_interface=DATABASE_INTERFACE,
+            occa_cache_dir=OCCA_CACHE_DIRECTORY,
+            nekrs_cache_dir=NEKRS_CACHE_DIRECTORY,
             action_baseline=ACTION_BASELINE,
             action_scale=ACTION_SCALE,
             first_wall_heat_flux_baseline=FIRST_WALL_HEAT_FLUX_BASELINE,

@@ -250,6 +250,8 @@ class SmartSimVecEnv:
         fixed_wall_mean: float | None = None,
         fixed_wall_std: float | None = None,
         episode_horizon_truncated: bool = True,
+        occa_cache_dir: str | None = None,
+        nekrs_cache_dir: str | None = None,
     ):
         if n_envs < 1:
             raise ValueError("n_envs must be positive")
@@ -336,6 +338,25 @@ class SmartSimVecEnv:
         self.simulation_failure_penalty = float(simulation_failure_penalty)
         self.max_failure_restarts = max_failure_restarts
         self.sim_executable = str(executable)
+        case_directory = executable.parent
+        self.occa_cache_dir = (
+            Path(occa_cache_dir).expanduser().resolve()
+            if occa_cache_dir is not None
+            else case_directory / ".cache" / "occa"
+        )
+        if nekrs_cache_dir is not None:
+            self.nekrs_cache_dir: Path | None = (
+                Path(nekrs_cache_dir).expanduser().resolve()
+            )
+        elif self.launcher.lower() == "local":
+            self.nekrs_cache_dir = case_directory / ".cache" / "nekrs"
+        else:
+            # A shared Slurm UDF cache must be prewarmed before concurrent
+            # workers use it, so do not opt into one implicitly.
+            self.nekrs_cache_dir = None
+        self.occa_cache_dir.mkdir(parents=True, exist_ok=True)
+        if self.nekrs_cache_dir is not None:
+            self.nekrs_cache_dir.mkdir(parents=True, exist_ok=True)
 
         if snapshot_schedules is not None and (
             snapshot_path is not None or snapshots_dir is not None
@@ -563,10 +584,10 @@ class SmartSimVecEnv:
             # Kernel binaries are immutable and safe to share.  Reuse the
             # case's populated cache instead of recompiling every NekRS kernel
             # in every generated model directory.
-            "OCCA_CACHE_DIR": str(
-                Path(self.sim_executable).parent / ".cache" / "occa"
-            ),
+            "OCCA_CACHE_DIR": str(self.occa_cache_dir),
         }
+        if self.nekrs_cache_dir is not None:
+            env_vars["NEKRS_CACHE_DIR"] = str(self.nekrs_cache_dir)
         run_args = {}
         run_command = "auto"
         if self.launcher.lower() == "slurm":
@@ -590,13 +611,6 @@ class SmartSimVecEnv:
         elif self.launcher.lower() == "local":
             # Useful for a workstation where GPU IDs are locally visible.
             env_vars["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
-            # The generated UDF is identical for every local episode. Keep
-            # its CMake build outside disposable model directories so a
-            # restart does not rebuild it while the old process is exiting.
-            # CSF3 retains its established launcher-managed cache behavior.
-            env_vars["NEKRS_CACHE_DIR"] = str(
-                Path(self.sim_executable).parent / ".cache" / "nekrs"
-            )
 
         run_settings = self.exp.create_run_settings(
             exe=self.sim_executable,
@@ -1094,9 +1108,20 @@ class SmartSimVecEnv:
                         "episode_end_reason": "nekrs_completed_before_new_frame",
                     }
                     terminal_physical_action = self._last_actions[env_id].copy()
+                    completed_episode_id = self._episode_id[env_id]
+                    completed_episode_steps = self._episode_steps[env_id]
+                    completed_snapshot = self._episode_snapshots[env_id]
                     observations[env_id] = self._restart_completed_sim(env_id)
                     infos[env_id]["terminal_physical_action"] = (
                         terminal_physical_action
+                    )
+                    infos[env_id].update(
+                        {
+                            "env_id": env_id,
+                            "episode_id": completed_episode_id,
+                            "episode_step": completed_episode_steps,
+                            "snapshot": str(completed_snapshot),
+                        }
                     )
                     continue
                 except _SimulationFailed as failure:
@@ -1108,6 +1133,8 @@ class SmartSimVecEnv:
                         ) from failure
 
                     terminal_physical_action = self._last_actions[env_id].copy()
+                    failed_episode_id = self._episode_id[env_id]
+                    failed_episode_steps = self._episode_steps[env_id]
                     observations[env_id], failures = self._recover_failed_sim(
                         env_id, failure
                     )
@@ -1127,6 +1154,14 @@ class SmartSimVecEnv:
                         "failure_directory": str(failure.model_directory),
                         "recovery_failures": len(failures) - 1,
                         "terminal_physical_action": terminal_physical_action,
+                        "env_id": env_id,
+                        "episode_id": failed_episode_id,
+                        "episode_step": failed_episode_steps,
+                        "snapshot": (
+                            str(failure.snapshot)
+                            if failure.snapshot is not None
+                            else None
+                        ),
                     }
                     continue
 
@@ -1136,19 +1171,31 @@ class SmartSimVecEnv:
                     self._last_reward_components[env_id]
                 )
                 transition_diagnostics.update(
-                    {"Tbar": float(self._last_tbar[env_id]),
-                     "Kbar": float(self._last_kbar[env_id]),
-                     "Nu": float(self._last_nu[env_id]),
-                     "action_sequence": int(self._action_sequences[env_id]),
-                     "episode_step": int(self._episode_steps[env_id]),
-                     "snapshot": str(self._episode_snapshots[env_id]),
-                     "solver_step": int(self._last_solver_steps[env_id]),
-                     "physical_time": float(self._last_times[env_id]),
-                     "x_plus_integrated_heat_flux": float(self._last_wall_fluxes[env_id, 1]),
-                     "y_minus_integrated_heat_flux": float(self._last_wall_fluxes[env_id, 2]),
-                     "y_plus_integrated_heat_flux": float(self._last_wall_fluxes[env_id, 3]),
-                     "allocation_gpu": int(self._gpu_id(env_id)),
-                     "applied_physical_action": self._last_actions[env_id].copy()}
+                    {
+                        "env_id": env_id,
+                        "episode_id": int(self._episode_id[env_id]),
+                        "Tbar": float(self._last_tbar[env_id]),
+                        "Kbar": float(self._last_kbar[env_id]),
+                        "Nu": float(self._last_nu[env_id]),
+                        "action_sequence": int(self._action_sequences[env_id]),
+                        "episode_step": int(self._episode_steps[env_id]),
+                        "snapshot": str(self._episode_snapshots[env_id]),
+                        "solver_step": int(self._last_solver_steps[env_id]),
+                        "physical_time": float(self._last_times[env_id]),
+                        "x_plus_integrated_heat_flux": float(
+                            self._last_wall_fluxes[env_id, 1]
+                        ),
+                        "y_minus_integrated_heat_flux": float(
+                            self._last_wall_fluxes[env_id, 2]
+                        ),
+                        "y_plus_integrated_heat_flux": float(
+                            self._last_wall_fluxes[env_id, 3]
+                        ),
+                        "allocation_gpu": int(self._gpu_id(env_id)),
+                        "applied_physical_action": self._last_actions[
+                            env_id
+                        ].copy(),
+                    }
                 )
 
                 horizon_reached = (

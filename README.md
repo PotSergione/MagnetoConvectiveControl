@@ -32,11 +32,18 @@ conda activate magnetoconvective-control
 mcc-train \
   --experiment configs/experiments/first_wall_ppo.yaml \
   --machine configs/machines/local.yaml \
+  --scale configs/scales/one_gpu.yaml \
   --dry-run
 ```
 
 A real run additionally requires compatible NekRS, MPI, SmartSim and
 SmartRedis installations plus the snapshot dataset described under `data/`.
+
+The same training path supports one or many independent physical environments.
+Experiment files define the science, machine files define the site, and scale
+files select the number of one-GPU simulation workers. Slurm runs can be
+submitted with `mcc-submit`; raw wall fields are transported through SmartRedis
+and are not written as durable training artifacts.
 
 See `docs/running_locally.md`, `docs/running_on_slurm.md`, and
 `docs/data_management.md` before launching an experiment.

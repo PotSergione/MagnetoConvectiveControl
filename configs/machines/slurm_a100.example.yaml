@@ -7,5 +7,15 @@ launcher:
 smartsim:
   interface: lo
 
+scheduler:
+  submit_command: sbatch
+  time: 2-00:00:00
+  job_name: mcc-train
+
+runtime:
+  startup_timeout: 1200
+
 # Do not commit usernames or site-private paths. Copy this file to a `.local.yaml`
-# profile and provide cluster-specific modules and storage paths there.
+# profile and provide cluster-specific account, partition, routable interface,
+# modules, cache locations, and storage paths there. The loopback interface is
+# valid only for a one-node run.

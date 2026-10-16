@@ -29,6 +29,7 @@ smartredis-*
 
 # Local machine configuration
 configs/machines/*.local.yaml
+configs/scales/*.local.yaml
 .env
 
 # LaTeX products

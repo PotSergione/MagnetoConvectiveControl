@@ -1,0 +1,26 @@
+launcher:
+  type: slurm
+  cpus_per_simulation: 4
+  simulations_per_gpu: 1
+  gpu_resource: gpu:1
+
+smartsim:
+  # Copy this file to bede.local.yaml and replace this with the routable
+  # compute-node interface reported inside a GH allocation.
+  interface: CHANGE_ME
+
+scheduler:
+  submit_command: ghbatch
+  partition: gh
+  time: 2-00:00:00
+  job_name: mcc-train
+
+runtime:
+  startup_timeout: 1200
+  # Put these in the local copy if the repository is not already on suitable
+  # shared storage. Prewarm both locations with the one-GPU smoke test.
+  # occa_cache: /nobackup/project/user/cache/occa
+  # nekrs_cache: /nobackup/project/user/cache/nekrs
+
+# Account, installation paths, storage paths, and the network-interface value
+# are deliberately not committed here.

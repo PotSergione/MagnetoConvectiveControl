@@ -268,16 +268,13 @@ four in the following update. Repeat this two-update snapshot cycle five
 times, for ten PPO rollouts and forty physical trajectories. Do not count the
 ten symmetry-related electrode rows as independent trajectories.
 
-Log per environment and per physical transition:
+Keep per-transition fields in memory for PPO. Persist only compact per-episode
+and per-update diagnostics:
 
-- raw and filtered fluxes;
-- reward components;
-- value predictions and, after rollout processing, returns and advantages;
-- deterministic action mean, sampled action, log probability, and action
-  standard deviation;
-- modal and electrode action coordinates;
-- recurrent episode-start flags; and
-- snapshot identity and physical episode phase.
+- snapshot identity, environment identity, and physical episode length;
+- episode return and termination or failure reason;
+- aggregate reward and optimizer diagnostics; and
+- the resolved configuration, code revision, and model checkpoint.
 
 ### Predeclared pass criteria
 
@@ -304,23 +301,11 @@ increasing total timesteps.
 
 ## Required telemetry
 
-Persist one row per physical transition containing:
-
-- campaign, stage, block, arm, snapshot, GPU, and action-sequence identifiers;
-- solver step and physical time;
-- instantaneous first-wall flux and all integrated wall fluxes;
-- total heating power, `Nu`, `Tbar`, and `Kbar`;
-- exact ten-component policy and physical actions;
-- modal action coefficients;
-- every reward component, while retaining enough raw data to recompute reward;
-  and
-- termination, truncation, and failure status.
-
-Store raw, unstandardized wall-flux maps in a chunked compressed external
-dataset. Record its schema, byte size, hashes, code revision, snapshot hashes,
-and action-sequence hashes in a versioned manifest. Processed compact tables
-may be committed; raw fields remain external according to the project data
-policy.
+Storage is intentionally minimal. Raw wall maps and per-transition tensors are
+transported through SmartRedis and discarded after the learner consumes them.
+Persist resolved configuration and revision metadata, compact update metrics,
+one compact row per completed physical episode, model checkpoints, and failure
+diagnostics. Solver logs from successful disposable workers need not be kept.
 
 ## Execution and restart contract
 
@@ -357,9 +342,10 @@ and the committed Slurm example requests one GPU. Before this campaign:
 1. enable and test `N_ENVS=4` through the complete SmartSim, MARL, recurrent
    state, callback, and checkpoint path;
 2. request and bind four GPUs with one CFD simulation per GPU;
-3. verify that snapshot assignment is paired and deterministic for Stages A/B;
+3. verify randomized snapshot assignment and record the selected snapshot for
+   each physical episode;
 4. add the open-loop modal action-sequence controller;
-5. add transition telemetry including raw wall maps and policy diagnostics;
+5. add compact episode and update telemetry without retaining raw wall maps;
 6. test interruption and exact campaign resumption; and
 7. benchmark four-environment throughput and database/CPU contention.
 

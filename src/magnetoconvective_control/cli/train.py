@@ -12,7 +12,7 @@ from pathlib import Path
 
 import yaml
 
-from ..config import export_compatibility_environment, load_yaml, merge, resolve_paths
+from ..config import compose, export_compatibility_environment, parallel_plan
 
 
 def _git_revision(root: Path) -> dict[str, object]:
@@ -32,14 +32,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--experiment", type=Path, required=True)
     parser.add_argument("--machine", type=Path)
+    parser.add_argument("--scale", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parents[3]
-    config = load_yaml(args.experiment.resolve())
-    if args.machine:
-        config = merge(config, load_yaml(args.machine.resolve()))
-    config = resolve_paths(config, root)
+    config = compose(args.experiment, root, args.machine, args.scale)
+    plan = parallel_plan(config)
     export_compatibility_environment(config)
 
     run_name = config.get("run", {}).get("name", "unnamed")
@@ -56,10 +55,21 @@ def main() -> None:
         "git": _git_revision(root),
         "experiment": str(args.experiment.resolve()),
         "machine": str(args.machine.resolve()) if args.machine else None,
+        "scale": str(args.scale.resolve()) if args.scale else None,
+        "parallelism": {
+            "physical_environments": plan.physical_environments,
+            "simulations_per_gpu": plan.simulations_per_gpu,
+            "required_gpus": plan.required_gpus,
+        },
     }
     (run_directory / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     if args.dry_run:
         print(yaml.safe_dump(config, sort_keys=False))
+        print(
+            "Parallel plan: "
+            f"{plan.physical_environments} environments on "
+            f"{plan.required_gpus} GPUs"
+        )
         print(f"Run directory: {run_directory}")
         return
 

@@ -1,0 +1,8 @@
+parallelism:
+  physical_environments: 1
+  simulations_per_gpu: 1
+
+resources:
+  nodes: 1
+  gpus_per_node: 1
+  gpu_resource_per_node: gpu:1

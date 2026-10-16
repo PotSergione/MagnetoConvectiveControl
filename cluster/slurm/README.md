@@ -4,15 +4,15 @@
 the portable `mcc-train` command. Module loading and native-library paths are
 site-specific and should be supplied by a private wrapper or shell environment.
 
-Example:
+The preferred interface is `mcc-submit`, which converts a scale profile into
+Slurm resource arguments and then invokes `train.slurm`:
 
 ```bash
 export NEKRS_HOME=/cluster/path/to/nekrs
-export MCC_ARTIFACT_ROOT=/scratch/project/mcc/runs
-export RL_SNAPSHOTS_DIR=/scratch/project/mcc/snapshots
-sbatch cluster/slurm/train.slurm \
-  configs/experiments/first_wall_ppo.yaml \
-  configs/machines/slurm_a100.example.yaml
+mcc-submit \
+  --experiment configs/experiments/first_wall_ppo.yaml \
+  --machine configs/machines/cluster.local.yaml \
+  --scale configs/scales/one_gpu.yaml
 ```
 
 The autonomous four-GPU design campaign uses one 48-hour `gpuA` allocation:
@@ -33,3 +33,6 @@ submitting the same command again resumes the immutable campaign plan. The
 launcher defaults to the CSF3 `nekrs-smartsim` Conda environment, sources
 `$HOME/.local/nekMHD/activate.sh`, and uses the native SmartRedis client under
 `$HOME/.local/smartredis-0.6.1`.
+
+`train.slurm` runs the Python controller directly in the batch shell. Do not
+wrap it in an outer `srun`: SmartSim owns the database and simulation job steps.

@@ -7,6 +7,9 @@ launcher:
 smartsim:
   interface: lo
 
+runtime:
+  startup_timeout: 1200
+
 # Site-dependent paths should normally be supplied by the shell:
 #   NEKRS_HOME=/path/to/nekrs
 #   MCC_ARTIFACT_ROOT=/path/to/runs

@@ -13,7 +13,9 @@ Validate configuration without starting NekRS:
 
 ```bash
 mcc-train --experiment configs/experiments/first_wall_ppo.yaml \
-  --machine configs/machines/local.yaml --dry-run
+  --machine configs/machines/local.yaml \
+  --scale configs/scales/one_gpu.yaml \
+  --dry-run
 ```
 
 Remove `--dry-run` only after confirming the resolved paths and run directory.

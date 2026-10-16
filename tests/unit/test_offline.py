@@ -126,19 +126,55 @@ def test_ten_agent_cyclic_views_and_action_alignment():
     env._action_observation_dtype = np.float32
     env._agent_shift = 2
     env.core = Dummy()
-    env.core.n_envs = 1
+    env.core.n_envs = 2
     env.core.wall_shape = (3, 20)
-    heat_flux = np.arange(3 * 3 * 20).reshape(1, 3, 3, 20)
-    actions = np.arange(10, dtype=float)[None] / 40.0
+    heat_flux = np.arange(2 * 3 * 3 * 20).reshape(2, 3, 3, 20)
+    actions = np.arange(20, dtype=float).reshape(2, 10) / 80.0
     observed = namespace["_agent_observations"](env, heat_flux, actions)
-    assert observed["heat_flux"].shape == (10, 3, 3, 20)
-    for agent in range(10):
-        np.testing.assert_array_equal(
-            observed["heat_flux"][agent], np.roll(heat_flux[0], -2 * agent, axis=2)
-        )
-        np.testing.assert_allclose(
-            observed["previous_actions"][agent], np.roll(actions[0], -agent) / 0.25
-        )
+    assert observed["heat_flux"].shape == (20, 3, 3, 20)
+    for simulation in range(2):
+        for agent in range(10):
+            row = simulation * 10 + agent
+            np.testing.assert_array_equal(
+                observed["heat_flux"][row],
+                np.roll(heat_flux[simulation], -2 * agent, axis=2),
+            )
+            np.testing.assert_allclose(
+                observed["previous_actions"][row],
+                np.roll(actions[simulation], -agent) / 0.25,
+            )
+
+
+def test_model_prefixes_isolate_parallel_environments():
+    tree = ast.parse(ENV_PATH.read_text())
+    class_node = next(
+        node for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SmartSimVecEnv"
+    )
+    methods = {
+        node.name: node for node in class_node.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name in {"_model_name", "_database_key"}
+    }
+    for method in methods.values():
+        method.decorator_list = []
+    namespace = {}
+    exec(
+        compile(
+            ast.Module(list(methods.values()), type_ignores=[]),
+            str(ENV_PATH),
+            "exec",
+        ),
+        namespace,
+    )
+    env = type("Dummy", (), {"_episode_id": [2, 7]})()
+    first = namespace["_model_name"](env, 0)
+    second = namespace["_model_name"](env, 1)
+    assert first == "nekrs_env_0_ep_2"
+    assert second == "nekrs_env_1_ep_7"
+    assert namespace["_database_key"](first, "nekrs:timeIntensity") != namespace[
+        "_database_key"
+    ](second, "nekrs:timeIntensity")
 
 
 def test_restart_name_is_canonicalized_in_generated_case():
