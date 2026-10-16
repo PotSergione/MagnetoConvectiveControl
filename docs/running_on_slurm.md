@@ -54,3 +54,32 @@ model checkpoints, and diagnostics retained for failed workers.
 Training writes numbered atomic checkpoints. Slurm sites that issue warning
 signals before termination should configure `--signal` so the Python process
 can save its final checkpoint before preemption.
+
+## One-GPU Bede stack smoke
+
+The committed Bede smoke job exercises one real restart, SmartSim/SmartRedis,
+one CUDA NekMHD worker, two physical control transitions, and one RecurrentPPO
+optimizer update. It deliberately uses a single node, so loopback is the correct
+database interface.
+
+The snapshot must be available as
+`data/snapshots/blanket0.f00260`. Submit from a Bede login node with:
+
+```bash
+cd "$HOME/MagnetoConvectiveControl"
+git pull --ff-only
+
+export MCC_STORAGE_ROOT=/nobackup/projects/PROJECT/USER
+ghbatch cluster/slurm/bede_stack_smoke.slurm
+```
+
+`MCC_STORAGE_ROOT` is the only required site-private value. The script derives
+the existing ARM Conda environment, NekMHD installation, caches and job-local
+working directory from it. `MCC_PROJECT_ROOT`, `MCC_CONDA_BASE`,
+`MCC_CONDA_ENV`, `NEKRS_HOME`, and `MCC_CACHE_ROOT` remain available as explicit
+overrides.
+
+The job preserves all generated files on failure. After success it removes only
+its job-local SmartSim case copies and TensorBoard events, retaining compact
+configuration, metadata, reward metrics and the reload-validated PPO checkpoint
+under `MCC_STORAGE_ROOT/smoke/mcc-stack-JOBID/artifacts/bede_stack_smoke`.

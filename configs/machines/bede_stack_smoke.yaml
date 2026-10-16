@@ -1,0 +1,12 @@
+launcher:
+  type: slurm
+  cpus_per_simulation: 4
+  simulations_per_gpu: 1
+  gpu_resource: gpu:1
+
+# The database and the only simulation share one GH node in this smoke test.
+smartsim:
+  interface: lo
+
+runtime:
+  startup_timeout: 1200

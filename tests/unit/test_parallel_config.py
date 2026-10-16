@@ -7,6 +7,7 @@ import pytest
 
 from magnetoconvective_control.cli.submit import build_submission_command
 from magnetoconvective_control.config import (
+    compose,
     export_compatibility_environment,
     merge,
     parallel_plan,
@@ -127,3 +128,25 @@ def test_submission_command_carries_scale_to_batch_controller(tmp_path):
         "--scale",
         str(scale),
     ]
+
+
+def test_bede_stack_smoke_is_one_gpu_one_update():
+    config = compose(
+        PROJECT_ROOT / "configs/experiments/stack_smoke.yaml",
+        PROJECT_ROOT,
+        PROJECT_ROOT / "configs/machines/bede_stack_smoke.yaml",
+        PROJECT_ROOT / "configs/scales/one_gpu.yaml",
+    )
+    plan = parallel_plan(config)
+
+    assert plan.physical_environments == 1
+    assert plan.required_gpus == 1
+    assert plan.nodes == 1
+    assert config["smartsim"]["interface"] == "lo"
+    assert config["ppo"] == {
+        "rollout_steps": 2,
+        "batch_size": 20,
+        "epochs": 1,
+        "learning_rate": 1.0e-4,
+    }
+    assert config["training"]["total_timesteps"] == 20

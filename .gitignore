@@ -18,6 +18,7 @@ rl_training/
 tensorboard/
 models/
 snapshots/
+data/snapshots
 *.log
 *.out
 *.err
