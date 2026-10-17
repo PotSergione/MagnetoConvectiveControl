@@ -142,6 +142,7 @@ def test_bede_stack_smoke_is_one_gpu_one_update():
     assert plan.physical_environments == 1
     assert plan.required_gpus == 1
     assert plan.nodes == 1
+    assert config["launcher"]["type"] == "local"
     assert config["smartsim"]["interface"] == "lo"
     assert config["ppo"] == {
         "rollout_steps": 2,

@@ -42,3 +42,7 @@ The Bede-specific one- and two-GPU stack checks are
 two GH nodes and discovers its SmartSim interface from the kernel route between
 them; it does not assume a site-specific network-device name. See
 `docs/running_on_slurm.md` for submission and dependency examples.
+
+The one-GPU Bede job uses SmartSim's local launcher inside its allocation;
+`ghbatch` supplies the outer Slurm allocation, while Slurm client commands are
+not available at the aarch64 compute-node call site.

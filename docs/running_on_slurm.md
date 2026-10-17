@@ -60,7 +60,10 @@ can save its final checkpoint before preemption.
 The committed Bede smoke job exercises one real restart, SmartSim/SmartRedis,
 one CUDA NekMHD worker, two physical control transitions, and one RecurrentPPO
 optimizer update. It deliberately uses a single node, so loopback is the correct
-database interface.
+database interface. The outer allocation is submitted with `ghbatch`, while
+SmartSim uses its local launcher inside that node because Bede's aarch64 compute
+environment does not expose the Slurm client commands required by SmartSim's
+Slurm launcher.
 
 The snapshot must be available as
 `data/snapshots/blanket0.f00260`. Submit from a Bede login node with:

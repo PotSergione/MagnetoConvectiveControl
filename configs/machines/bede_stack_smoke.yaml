@@ -1,5 +1,9 @@
 launcher:
-  type: slurm
+  # ghbatch already placed the controller on the allocated GH node.  Bede's
+  # aarch64 compute environment does not expose the Slurm client commands that
+  # SmartSim's Slurm launcher requires, so launch the database and sole NekRS
+  # worker directly on that node.
+  type: local
   cpus_per_simulation: 4
   simulations_per_gpu: 1
   gpu_resource: gpu:1
