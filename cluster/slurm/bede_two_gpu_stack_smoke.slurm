@@ -44,14 +44,42 @@ export BLANKET_CMAKE="$(command -v cmake)"
 export NEKRS_UDF_INCLUDES="${conda_env}/include;${NEKRS_HOME}/udf"
 export NEKRS_UDF_LIBS="${conda_env}/lib/libsmartredis.so"
 
-mapfile -t allocation_nodes < <(scontrol show hostnames "${SLURM_JOB_NODELIST}")
+if ! command -v bede-mpirun >/dev/null 2>&1; then
+    echo "bede-mpirun is required for multi-node GH process placement" >&2
+    exit 1
+fi
+export MCC_BEDE_MPIRUN="$(command -v bede-mpirun)"
+
+# Slurm's aarch64 client commands are unavailable on the GH compute nodes.
+# Ask Bede's supported MPI wrapper to run one tagged hostname probe per node.
+host_probe="$("${MCC_BEDE_MPIRUN}" --bede-par 1ppn:none bash -c \
+    'printf "__MCC_HOST__%s\n" "$(hostname -s)"')"
+mapfile -t allocation_nodes < <(
+    sed -n 's/^.*__MCC_HOST__//p' <<<"${host_probe}" |
+        awk '!seen[$0]++'
+)
 if [[ ${#allocation_nodes[@]} -ne 2 ]]; then
     echo "Expected exactly two allocated nodes, found ${#allocation_nodes[@]}" >&2
+    echo "bede-mpirun host probe output:" >&2
+    echo "${host_probe}" >&2
     exit 1
 fi
 
-controller_node="${allocation_nodes[0]}"
-peer_node="${allocation_nodes[1]}"
+controller_node="$(hostname -s)"
+peer_node=""
+for candidate in "${allocation_nodes[@]}"; do
+    if [[ "${candidate}" != "${controller_node}" ]]; then
+        peer_node="${candidate}"
+        break
+    fi
+done
+if [[ -z "${peer_node}" ]]; then
+    echo "Could not identify the peer node from: ${allocation_nodes[*]}" >&2
+    exit 1
+fi
+printf -v MCC_BEDE_HOSTS '%s,' "${allocation_nodes[@]}"
+export MCC_BEDE_HOSTS="${MCC_BEDE_HOSTS%,}"
+
 peer_ip="$(getent ahostsv4 "${peer_node}" | awk 'NR == 1 {print $1}')"
 if [[ -z "${peer_ip}" ]]; then
     echo "Could not resolve an IPv4 address for ${peer_node}" >&2
@@ -105,19 +133,18 @@ echo "Peer address:       ${peer_ip}"
 echo "Route:              ${route}"
 echo "SmartSim interface: ${SMARTSIM_INTERFACE}"
 echo "Controller address: ${controller_ip}"
+echo "Worker hosts:       ${MCC_BEDE_HOSTS}"
+echo "MPI launcher:       ${MCC_BEDE_MPIRUN}"
 echo "Arch:               $(uname -m)"
 echo "Commit:             $(git -C "${project_root}" rev-parse HEAD)"
 echo "Work:               ${work_dir}"
 echo "Artifacts:          ${MCC_ARTIFACT_ROOT}"
 
-# Verify that the dynamically selected interface exists on both nodes and that
-# Slurm exposes one GH200 to a task on each node before SmartSim starts.
-srun \
-    --nodes=2 \
-    --ntasks=2 \
-    --ntasks-per-node=1 \
-    --gres=gpu:1 \
-    --label \
+# Verify through the same launch mechanism used by the workers that the
+# selected interface exists and one allocated GH200 is visible on both nodes.
+"${MCC_BEDE_MPIRUN}" \
+    --bede-par 1ppn:none \
+    -x SMARTSIM_INTERFACE \
     bash -c '
         set -euo pipefail
         test -d "/sys/class/net/${SMARTSIM_INTERFACE}"

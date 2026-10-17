@@ -1,5 +1,8 @@
 launcher:
-  type: slurm
+  # SmartSim supervises locally while this adapter places one NekRS process
+  # on each allocated GH node through Bede's supported MPI wrapper.
+  type: bede_mpirun
+  mpi_command: bede-mpirun
   cpus_per_simulation: 4
   simulations_per_gpu: 1
   gpu_resource: gpu:1

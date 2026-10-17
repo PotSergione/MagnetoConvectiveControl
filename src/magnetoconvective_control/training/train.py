@@ -36,6 +36,8 @@ WALL_NPERP = int(os.environ.get("RL_WALL_NPERP", "128"))
 WALL_NZ = int(os.environ.get("RL_WALL_NZ", "160"))
 ACT_DIM = 10
 LAUNCHER = os.environ.get("RL_LAUNCHER", "slurm")
+BEDE_MPI_COMMAND = os.environ.get("MCC_BEDE_MPIRUN", "bede-mpirun")
+BEDE_ALLOCATION_HOSTS = os.environ.get("MCC_BEDE_HOSTS")
 GPU_GRES = os.environ.get("RL_GPU_GRES", os.environ.get("SMARTSIM_GPU_GRES", "gpu:1"))
 CPUS_PER_SIMULATION = int(
     os.environ.get(
@@ -466,6 +468,8 @@ def main() -> None:
             wall_shape=(WALL_NPERP, WALL_NZ),
             act_dim=ACT_DIM,
             launcher=LAUNCHER,
+            bede_mpi_command=BEDE_MPI_COMMAND,
+            allocation_hosts=BEDE_ALLOCATION_HOSTS,
             gpu_gres=GPU_GRES,
             cpus_per_simulation=CPUS_PER_SIMULATION,
             max_episode_steps=MAX_EPISODE_STEPS,

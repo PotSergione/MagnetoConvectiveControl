@@ -14,6 +14,7 @@ import re
 import shutil
 import time
 import os
+import sys
 from dataclasses import dataclass
 from math import exp
 from pathlib import Path
@@ -22,6 +23,11 @@ from typing import Iterable, Sequence
 import numpy as np
 from smartredis.client import Client
 from smartsim import Experiment
+
+from ..launchers.bede_mpirun import (
+    discover_allocation_hosts,
+    parse_allocation_hosts,
+)
 
 
 ACTION_KEY = "nekrs:timeIntensity"
@@ -252,6 +258,8 @@ class SmartSimVecEnv:
         episode_horizon_truncated: bool = True,
         occa_cache_dir: str | None = None,
         nekrs_cache_dir: str | None = None,
+        bede_mpi_command: str = "bede-mpirun",
+        allocation_hosts: str | Sequence[str] | None = None,
     ):
         if n_envs < 1:
             raise ValueError("n_envs must be positive")
@@ -288,7 +296,7 @@ class SmartSimVecEnv:
         self.observation_shape = (len(WALL_CHANNELS), *self.wall_shape)
         self.obs_dim = int(np.prod(self.observation_shape))
         self.act_dim = act_dim
-        self.launcher = launcher
+        self.launcher = launcher.lower()
         self.simulations_per_gpu = simulations_per_gpu
         self.n_gpus = (n_envs + simulations_per_gpu - 1) // simulations_per_gpu
         self.gpu_gres = (
@@ -303,6 +311,24 @@ class SmartSimVecEnv:
         )
         if self.cpus_per_simulation < 1:
             raise ValueError("cpus_per_simulation must be positive")
+        self.bede_mpi_command = bede_mpi_command
+        self.allocation_hosts: tuple[str, ...] = ()
+        if self.launcher == "bede_mpirun":
+            if simulations_per_gpu != 1:
+                raise ValueError(
+                    "bede_mpirun currently requires simulations_per_gpu=1"
+                )
+            host_value = allocation_hosts or os.environ.get("MCC_BEDE_HOSTS")
+            self.allocation_hosts = (
+                parse_allocation_hosts(host_value)
+                if host_value
+                else discover_allocation_hosts(self.bede_mpi_command)
+            )
+            if self.n_gpus > len(self.allocation_hosts):
+                raise ValueError(
+                    f"The run needs {self.n_gpus} Bede GPU hosts, but only "
+                    f"{len(self.allocation_hosts)} were discovered"
+                )
         # Retained for launcher compatibility; explicit tensor names are used.
         self.observation_fields = tuple(observation_fields)
         self.poll_interval = poll_interval
@@ -348,7 +374,7 @@ class SmartSimVecEnv:
             self.nekrs_cache_dir: Path | None = (
                 Path(nekrs_cache_dir).expanduser().resolve()
             )
-        elif self.launcher.lower() == "local":
+        elif self.launcher == "local":
             self.nekrs_cache_dir = case_directory / ".cache" / "nekrs"
         else:
             # A shared Slurm UDF cache must be prewarmed before concurrent
@@ -479,13 +505,16 @@ class SmartSimVecEnv:
         self._actions_pending = False
         self._closed = False
 
-        self.exp = Experiment(name="rl_training", launcher=launcher)
+        experiment_launcher = (
+            "local" if self.launcher == "bede_mpirun" else self.launcher
+        )
+        self.exp = Experiment(name="rl_training", launcher=experiment_launcher)
         self.db = self.exp.create_database(
             port=database_port,
             interface=database_interface,
         )
 
-        if self.launcher.lower() == "slurm":
+        if self.launcher == "slurm":
             # The Orchestrator only needs one CPU for this smoke test.
             self.db.set_cpus(1)
 
@@ -590,7 +619,9 @@ class SmartSimVecEnv:
             env_vars["NEKRS_CACHE_DIR"] = str(self.nekrs_cache_dir)
         run_args = {}
         run_command = "auto"
-        if self.launcher.lower() == "slurm":
+        executable = self.sim_executable
+        executable_args = None
+        if self.launcher == "slurm":
             run_command = "srun"
             run_args = {
                 "nodes": 1,
@@ -608,12 +639,26 @@ class SmartSimVecEnv:
                 # are zero-based relative to the GPUs in the parent job.
                 run_args["overlap"] = None
                 run_args["gpu-bind"] = f"map_gpu:{gpu_id}"
-        elif self.launcher.lower() == "local":
+        elif self.launcher == "local":
             # Useful for a workstation where GPU IDs are locally visible.
             env_vars["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+        elif self.launcher == "bede_mpirun":
+            # SmartSim supervises this adapter locally; the adapter execs
+            # bede-mpirun to place the generated case on its assigned node.
+            executable = sys.executable
+            executable_args = [
+                "-m",
+                "magnetoconvective_control.launchers.bede_mpirun",
+                Path(self.sim_executable).name,
+            ]
+            env_vars["MCC_BEDE_TARGET_HOST"] = self.allocation_hosts[gpu_id]
+            env_vars["MCC_BEDE_MPIRUN"] = self.bede_mpi_command
+        else:
+            raise ValueError(f"Unsupported launcher: {self.launcher}")
 
         run_settings = self.exp.create_run_settings(
-            exe=self.sim_executable,
+            exe=executable,
+            exe_args=executable_args,
             run_command=run_command,
             run_args=run_args,
             env_vars=env_vars,

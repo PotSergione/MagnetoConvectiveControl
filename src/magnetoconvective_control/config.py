@@ -33,6 +33,7 @@ ENVIRONMENT_KEYS = {
     ("launcher", "cpus_per_simulation"): "RL_CPUS_PER_SIMULATION",
     ("launcher", "simulations_per_gpu"): "RL_SIMULATIONS_PER_GPU",
     ("launcher", "gpu_resource"): "RL_GPU_GRES",
+    ("launcher", "mpi_command"): "MCC_BEDE_MPIRUN",
     # Scale values are exported after machine defaults so the selected scale
     # has the same precedence in the compatibility environment as in YAML.
     ("parallelism", "physical_environments"): "RL_N_ENVS",
@@ -120,6 +121,11 @@ def parallel_plan(config: dict[str, Any]) -> ParallelPlan:
             default=os.environ.get("RL_LAUNCHER", "slurm"),
         )
     ).lower()
+    if launcher == "bede_mpirun" and gpus_per_node != 1:
+        raise ValueError(
+            "The bede_mpirun backend maps one physical environment to one "
+            "GPU node and therefore requires resources.gpus_per_node=1"
+        )
     interface_value = _nested(
         config,
         "smartsim",
@@ -131,7 +137,7 @@ def parallel_plan(config: dict[str, Any]) -> ParallelPlan:
     if effective_nodes is None:
         effective_nodes = int(os.environ.get("SLURM_JOB_NUM_NODES", "1"))
     if (
-        launcher == "slurm"
+        launcher in {"slurm", "bede_mpirun"}
         and effective_nodes > 1
         and interface.lower()
         in {"", "lo", "none", "change_me", "replace_me"}
@@ -142,7 +148,7 @@ def parallel_plan(config: dict[str, Any]) -> ParallelPlan:
             "interface"
         )
     allocated_nodes = os.environ.get("SLURM_JOB_NUM_NODES")
-    if launcher == "slurm" and allocated_nodes is not None:
+    if launcher in {"slurm", "bede_mpirun"} and allocated_nodes is not None:
         allocated_gpus = int(allocated_nodes) * gpus_per_node
         if required_gpus > allocated_gpus:
             raise ValueError(

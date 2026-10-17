@@ -40,7 +40,9 @@ wrap it in an outer `srun`: SmartSim owns the database and simulation job steps.
 The Bede-specific one- and two-GPU stack checks are
 `bede_stack_smoke.slurm` and `bede_two_gpu_stack_smoke.slurm`. The latter uses
 two GH nodes and discovers its SmartSim interface from the kernel route between
-them; it does not assume a site-specific network-device name. See
+them; it does not assume a site-specific network-device name. It uses
+`bede-mpirun` for both allocation discovery and one-worker-per-node placement,
+without requiring Slurm client commands on the aarch64 nodes. See
 `docs/running_on_slurm.md` for submission and dependency examples.
 
 The one-GPU Bede job uses SmartSim's local launcher inside its allocation;

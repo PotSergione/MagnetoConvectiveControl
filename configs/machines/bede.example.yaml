@@ -1,12 +1,16 @@
 launcher:
-  type: slurm
+  # The GH compute nodes do not expose Slurm client commands. SmartSim
+  # supervises locally and this backend places one worker on each allocated
+  # node with Bede's supported MPI wrapper.
+  type: bede_mpirun
+  mpi_command: bede-mpirun
   cpus_per_simulation: 4
   simulations_per_gpu: 1
   gpu_resource: gpu:1
 
 smartsim:
   # Copy this file to bede.local.yaml and replace this with the routable
-  # compute-node interface reported inside a GH allocation.
+  # compute-node interface reported by the two-node smoke test.
   interface: CHANGE_ME
 
 scheduler:

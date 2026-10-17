@@ -31,7 +31,8 @@ share one node.
 For Bede, copy `configs/machines/bede.example.yaml` to the ignored
 `configs/machines/bede.local.yaml`, fill in the interface and any private
 storage settings, and leave the committed example free of account names and
-absolute user paths.
+absolute user paths. The Bede backend discovers the allocated host names with
+`bede-mpirun`; a private wrapper does not need to construct `MCC_BEDE_HOSTS`.
 
 Inspect candidate interfaces from a compute allocation with:
 
@@ -42,10 +43,12 @@ ip -o -4 addr show scope global
 Use the interface name whose address is reachable between allocated compute
 nodes; do not enter an IP address in `smartsim.interface`.
 
-The batch controller is deliberately not wrapped in `srun`. SmartSim launches
-one nonblocking `srun --nodes=1 --ntasks=1 --gres=gpu:1` step per physical
-environment. Each step runs an independent one-rank NekMHD simulation; the
-simulations do not form one distributed MPI job.
+The batch controller is deliberately not wrapped in `srun`. With a conventional
+Slurm machine profile, SmartSim launches one nonblocking `srun` step per
+physical environment. On Bede GH, the `bede_mpirun` backend instead launches
+one independent one-rank NekMHD process on each selected allocation host. In
+both cases the simulations remain independent and do not form one distributed
+NekMHD MPI job.
 
 Raw wall maps remain transient in SmartRedis. Durable training output is
 limited to resolved configuration and metadata, compact reward/episode metrics,
@@ -90,10 +93,19 @@ under `MCC_STORAGE_ROOT/smoke/mcc-stack-JOBID/artifacts/bede_stack_smoke`.
 ### Two-node/two-GPU integration smoke
 
 The two-GPU Bede launcher requests one GH200 on each of two nodes. Inside the
-allocation it resolves the peer node, asks the controller node's routing table
-which interface reaches that peer, verifies that interface and one GPU on both
-nodes, and exports the interface to SmartSim. No interactive compute-node login
-or hardcoded network-device name is required.
+allocation it uses `bede-mpirun` to discover both nodes, resolves the peer,
+asks the controller node's routing table which interface reaches that peer,
+and verifies that interface and one GPU on both nodes. SmartSim supervises its
+database locally on the controller. Each generated NekMHD model is wrapped by
+`bede-mpirun --host NODE -np 1`, which provides remote placement without the
+Slurm client commands unavailable on Bede's aarch64 compute nodes. No
+interactive compute-node login or hardcoded network-device name is required.
+
+This backend is selected only by `launcher.type: bede_mpirun`. CSF3 profiles
+continue to use their existing `local` or `slurm` launchers and do not pass
+through the Bede adapter. Host discovery is automatic when `MCC_BEDE_HOSTS` is
+unset; the smoke launcher exports the same value explicitly because it also
+uses the host list to determine the routable SmartSim interface.
 
 Queue it behind a one-GPU smoke test so that it consumes two nodes only after
 the foundational test passes:

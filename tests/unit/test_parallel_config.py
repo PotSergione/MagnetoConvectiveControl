@@ -58,11 +58,50 @@ def test_multi_node_placeholder_interface_is_rejected():
         parallel_plan(config)
 
 
+def test_bede_mpirun_multi_node_loopback_is_rejected():
+    config = {
+        "parallelism": {"physical_environments": 2},
+        "resources": {"nodes": 2, "gpus_per_node": 1},
+        "launcher": {"type": "bede_mpirun"},
+        "smartsim": {"interface": "lo"},
+    }
+    with pytest.raises(ValueError, match="loopback"):
+        parallel_plan(config)
+
+
+def test_bede_mpirun_rejects_multiple_gpus_per_node():
+    config = {
+        "parallelism": {"physical_environments": 2},
+        "resources": {"nodes": 1, "gpus_per_node": 2},
+        "launcher": {"type": "bede_mpirun"},
+        "smartsim": {"interface": "ib0"},
+    }
+    with pytest.raises(ValueError, match="gpus_per_node=1"):
+        parallel_plan(config)
+
+
+def test_csf3_launcher_remains_local():
+    config = compose(
+        PROJECT_ROOT / "configs/experiments/first_wall_ppo.yaml",
+        PROJECT_ROOT,
+        PROJECT_ROOT / "configs/machines/csf3_four_gpu.yaml",
+        PROJECT_ROOT / "configs/scales/four_gpu.yaml",
+    )
+    plan = parallel_plan(config)
+
+    assert config["launcher"]["type"] == "local"
+    assert plan.physical_environments == 4
+    assert plan.required_gpus == 4
+
+
 def test_scale_parallelism_overrides_machine_default(monkeypatch):
     monkeypatch.setenv("RL_N_ENVS", "1")
     monkeypatch.setenv("RL_SIMULATIONS_PER_GPU", "3")
     config = {
-        "launcher": {"simulations_per_gpu": 3},
+        "launcher": {
+            "simulations_per_gpu": 3,
+            "mpi_command": "/opt/bin/bede-mpirun",
+        },
         "parallelism": {
             "physical_environments": 4,
             "simulations_per_gpu": 1,
@@ -71,6 +110,7 @@ def test_scale_parallelism_overrides_machine_default(monkeypatch):
     export_compatibility_environment(config)
     assert os.environ["RL_N_ENVS"] == "4"
     assert os.environ["RL_SIMULATIONS_PER_GPU"] == "1"
+    assert os.environ["MCC_BEDE_MPIRUN"] == "/opt/bin/bede-mpirun"
 
 
 def test_insufficient_gpu_allocation_is_rejected():
@@ -166,6 +206,8 @@ def test_bede_two_gpu_stack_smoke_is_multi_node_one_update(monkeypatch):
     assert plan.physical_environments == 2
     assert plan.required_gpus == 2
     assert plan.nodes == 2
+    assert config["launcher"]["type"] == "bede_mpirun"
+    assert config["launcher"]["mpi_command"] == "bede-mpirun"
     assert "smartsim" not in config
     assert config["ppo"] == {
         "rollout_steps": 2,
