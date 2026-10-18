@@ -12,16 +12,44 @@ set -euo pipefail
 
 : "${MCC_STORAGE_ROOT:?Set MCC_STORAGE_ROOT to your user directory under /nobackup}"
 
+require_directory() {
+    [[ -d "$1" ]] || {
+        echo "Required directory not found: $1" >&2
+        exit 1
+    }
+}
+
+require_file() {
+    [[ -f "$1" ]] || {
+        echo "Required file not found: $1" >&2
+        exit 1
+    }
+}
+
+require_executable() {
+    [[ -x "$1" ]] || {
+        echo "Required executable not found: $1" >&2
+        exit 1
+    }
+}
+
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || {
+        echo "Required command not found: $1" >&2
+        exit 1
+    }
+}
+
 project_root="${MCC_PROJECT_ROOT:-${HOME}/MagnetoConvectiveControl}"
 conda_base="${MCC_CONDA_BASE:-${MCC_STORAGE_ROOT}/aarch64/miniconda}"
 conda_env="${MCC_CONDA_ENV:-${conda_base}/envs/magnetoconvective-control}"
 export NEKRS_HOME="${NEKRS_HOME:-${MCC_STORAGE_ROOT}/aarch64/nekrs-mhd}"
 
-test -d "${project_root}/.git"
-test -f "${project_root}/data/snapshots/blanket0.f00260"
-test -f "${conda_base}/etc/profile.d/conda.sh"
-test -x "${conda_env}/bin/python"
-test -x "${NEKRS_HOME}/bin/nrsmpi"
+require_directory "${project_root}/.git"
+require_file "${project_root}/data/snapshots/blanket0.f00260"
+require_file "${conda_base}/etc/profile.d/conda.sh"
+require_executable "${conda_env}/bin/python"
+require_executable "${NEKRS_HOME}/bin/nrsmpi"
 
 module purge
 module load gcc/12.2
@@ -37,6 +65,10 @@ export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS=1
 
 export PATH="${NEKRS_HOME}/bin:${PATH}"
+require_command mpicc
+require_command mpic++
+require_command mpifort
+require_command cmake
 export CC="$(command -v mpicc)"
 export CXX="$(command -v mpic++)"
 export FC="$(command -v mpifort)"
@@ -44,16 +76,21 @@ export BLANKET_CMAKE="$(command -v cmake)"
 export NEKRS_UDF_INCLUDES="${conda_env}/include;${NEKRS_HOME}/udf"
 export NEKRS_UDF_LIBS="${conda_env}/lib/libsmartredis.so"
 
-if ! command -v bede-mpirun >/dev/null 2>&1; then
-    echo "bede-mpirun is required for multi-node GH process placement" >&2
-    exit 1
-fi
+require_command bede-mpirun
 export MCC_BEDE_MPIRUN="$(command -v bede-mpirun)"
 
 # Slurm's aarch64 client commands are unavailable on the GH compute nodes.
 # Ask Bede's supported MPI wrapper to run one tagged hostname probe per node.
+set +e
 host_probe="$("${MCC_BEDE_MPIRUN}" --bede-par 1ppn:none bash -c \
-    'printf "__MCC_HOST__%s\n" "$(hostname -s)"')"
+    'printf "__MCC_HOST__%s\n" "$(hostname -s)"' 2>&1)"
+host_probe_status=$?
+set -e
+if [[ ${host_probe_status} -ne 0 ]]; then
+    echo "bede-mpirun allocation probe failed with exit ${host_probe_status}" >&2
+    echo "${host_probe}" >&2
+    exit "${host_probe_status}"
+fi
 mapfile -t allocation_nodes < <(
     sed -n 's/^.*__MCC_HOST__//p' <<<"${host_probe}" |
         awk '!seen[$0]++'
