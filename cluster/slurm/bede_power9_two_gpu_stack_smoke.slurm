@@ -276,11 +276,6 @@ mcc-train \
     --machine "${project_root}/configs/machines/bede_power9_two_gpu_stack_smoke.yaml" \
     --scale "${project_root}/configs/scales/two_gpu.yaml"
 
-for env_id in 0 1; do
-    model_dir="${work_dir}/rl_training/nekrs_env_${env_id}_ep_0"
-    test -s "${model_dir}/blanket.log"
-done
-
 python - <<'PY'
 import json
 import os
@@ -319,8 +314,9 @@ print("Reloaded PPO checkpoint at", model.num_timesteps, "timesteps")
 print("Persistent artifacts:", run)
 PY
 
-# Keep failed workers for diagnosis. Once both logs and the checkpoint have
-# been validated, remove only job-local generated cases and event data.
+# Successful workers are removed by the environment after graceful MPI
+# finalization. Retain failed workers for diagnosis, but remove telemetry after
+# the persistent checkpoint has been validated.
 rm -rf -- "${work_dir}/rl_training" "${work_dir}/tensorboard"
 
 echo "MCC BEDE POWER9/V100 TWO-NODE STACK SMOKE: SUCCESS"

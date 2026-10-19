@@ -82,6 +82,7 @@ static double redisPublishInterval = 0.1;
 static double nextRedisPublishTime = 0.1;
 static int redisRank = 0;
 static int64_t appliedActionSequence = 0;
+static bool shutdownRequested = false;
 static std::unique_ptr<SmartRedis::Client> redisClient;
 
 static std::string redisKey(const std::string &field)
@@ -387,6 +388,7 @@ static void publishToRedis(double time, int tstep)
 static void fetchNextAction()
 {
   int64_t requestedSequence = appliedActionSequence;
+  int64_t requestedShutdown = 0;
   std::array<double, nElectrodes> requestedAction = {};
   if (redisRank == 0) {
     ensureRedisClient();
@@ -401,10 +403,21 @@ static void fetchNextAction()
     redisClient->unpack_tensor("nekrs:timeIntensity", requestedAction.data(),
                                {nElectrodes}, SRTensorTypeDouble,
                                SRMemLayoutContiguous);
+    if (redisClient->tensor_exists("nekrs:shutdown")) {
+      redisClient->unpack_tensor("nekrs:shutdown", &requestedShutdown,
+                                 {1}, SRTensorTypeInt64,
+                                 SRMemLayoutContiguous);
+    }
   }
   MPI_Bcast(&requestedSequence, 1, MPI_INT64_T, 0, platform->comm.mpiComm);
+  MPI_Bcast(&requestedShutdown, 1, MPI_INT64_T, 0, platform->comm.mpiComm);
   MPI_Bcast(requestedAction.data(), nElectrodes, MPI_DOUBLE, 0,
             platform->comm.mpiComm);
+  if (requestedShutdown != 0) {
+    shutdownRequested = true;
+    appliedActionSequence = requestedSequence;
+    return;
+  }
   for (int electrode = 0; electrode < nElectrodes; ++electrode) {
     if (!std::isfinite(requestedAction[electrode])) {
       throw std::runtime_error("received a non-finite electrode action");
@@ -565,6 +578,7 @@ void UDF_Setup()
 void UDF_ExecuteStep(double time, int tstep)
 {
   if (!nrs->timeStepConverged) return;
+  if (shutdownRequested) return;
   const double tolerance = 1e-10 * std::max(1.0, std::abs(time));
   if (time + tolerance < nextRedisPublishTime) return;
 
@@ -573,6 +587,15 @@ void UDF_ExecuteStep(double time, int tstep)
     // sequenced action. This provides an exact synchronous RL transition.
     publishToRedis(time, tstep);
     fetchNextAction();
+    if (shutdownRequested) {
+      // The driver evaluates its stop condition before each step. Schedule
+      // one final step, skip further Redis exchanges, then finalize normally.
+      platform->options.setArgs("NUMBER TIMESTEPS", std::to_string(tstep + 1));
+      if (redisRank == 0) {
+        std::printf("SmartRedis shutdown requested at step %d\n", tstep);
+      }
+      return;
+    }
   } catch (const std::exception &error) {
     std::fprintf(stderr,
                  "Rank %d failed during SmartRedis exchange at t=%.8e: %s\n",

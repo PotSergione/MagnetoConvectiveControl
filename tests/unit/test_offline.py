@@ -1,6 +1,7 @@
 """Dependency-free contract tests; these never launch SmartSim or NekRS."""
 
 import ast
+import time
 from dataclasses import dataclass
 from math import exp
 from pathlib import Path
@@ -102,6 +103,9 @@ def test_static_solver_python_contract():
         assert field in udf
     assert 'totalHeatingPower' in env
     assert 'totalHeatingPower' in udf
+    assert 'SHUTDOWN_KEY = "nekrs:shutdown"' in env
+    assert 'tensor_exists("nekrs:shutdown")' in udf
+    assert '"NUMBER TIMESTEPS", std::to_string(tstep + 1)' in udf
     assert 'MPI_Allgatherv' in udf
     assert 'MPI_Bcast' in udf
     publish = udf[udf.index("static void publishToRedis"):udf.index("static void fetchNextAction")]
@@ -109,6 +113,61 @@ def test_static_solver_python_contract():
     assert publish.index("ensureRedisClient();") < publish.index("redisClient->put_tensor")
     runner = (CASE_PATH / "run_case.sh").read_text()
     assert "BLANKET_CMAKE" in runner
+
+
+def test_bede_shutdown_releases_worker_and_waits_for_clean_completion():
+    tree = ast.parse(ENV_PATH.read_text())
+    class_node = next(
+        node for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SmartSimVecEnv"
+    )
+    method = next(
+        node for node in class_node.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_gracefully_stop_bede_sim"
+    )
+    namespace = {
+        "np": np,
+        "time": time,
+        "SHUTDOWN_KEY": "nekrs:shutdown",
+        "ACTION_KEY": "nekrs:timeIntensity",
+        "ACTION_SEQUENCE_KEY": "nekrs:actionSequence",
+    }
+    exec(
+        compile(ast.Module([method], type_ignores=[]), str(ENV_PATH), "exec"),
+        namespace,
+    )
+
+    class Client:
+        writes = []
+
+        def put_tensor(self, key, value):
+            self.writes.append((key, np.asarray(value).copy()))
+
+    class Experiment:
+        statuses = iter(("RUNNING", "COMPLETED"))
+
+        def get_status(self, _model):
+            return [next(self.statuses)]
+
+    class Dummy:
+        _database_key = staticmethod(lambda model, key: f"{model}.{key}")
+
+    env = Dummy()
+    env.client = Client()
+    env.exp = Experiment()
+    env._last_actions = [np.linspace(-0.1, 0.1, 10)]
+    env._action_sequences = np.asarray([2], dtype=np.int64)
+    env.poll_interval = 0.0
+    model = type("Model", (), {"name": "nekrs_env_0_ep_0"})()
+
+    assert namespace["_gracefully_stop_bede_sim"](env, 0, model)
+    assert [item[0] for item in env.client.writes] == [
+        "nekrs_env_0_ep_0.nekrs:shutdown",
+        "nekrs_env_0_ep_0.nekrs:timeIntensity",
+        "nekrs_env_0_ep_0.nekrs:actionSequence",
+    ]
+    np.testing.assert_array_equal(env.client.writes[-1][1], [3])
 
 
 def test_ten_agent_cyclic_views_and_action_alignment():

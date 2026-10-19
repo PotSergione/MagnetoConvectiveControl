@@ -151,6 +151,11 @@ It proves two-node routing and parallel data harvesting; the two NekMHD workers
 remain isolated one-rank simulations rather than forming a distributed CFD
 calculation.
 
+At cleanup, the controller commits a sequenced SmartRedis shutdown request to
+each worker. NekRS then takes one final step and follows its normal MPI
+finalization path; SmartSim does not terminate Bede's `orted` steps as failed
+applications.
+
 ### Two-node/two-GPU GH integration smoke
 
 The two-GPU Bede launcher requests one GH200 on each of two nodes. Inside the

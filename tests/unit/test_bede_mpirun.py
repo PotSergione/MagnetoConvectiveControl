@@ -1,6 +1,5 @@
 """Tests for Bede's MPI-based remote worker adapter."""
 
-import signal
 import subprocess
 from pathlib import Path
 
@@ -10,7 +9,6 @@ from magnetoconvective_control.launchers.bede_mpirun import (
     build_launch_command,
     discover_allocation_hosts,
     parse_allocation_hosts,
-    supervise_launch,
 )
 
 
@@ -104,65 +102,3 @@ def test_discover_allocation_hosts_reports_probe_failure():
 
     with pytest.raises(RuntimeError, match="allocation failed"):
         discover_allocation_hosts("bede-mpirun", runner=runner)
-
-
-def test_supervise_launch_preserves_unexpected_worker_failure():
-    class FailedProcess:
-        def poll(self):
-            return 7
-
-        def wait(self):
-            return 7
-
-    calls = []
-
-    def popen(command, env):
-        calls.append((command, env))
-        return FailedProcess()
-
-    def set_signal_handler(_signum, _handler):
-        return signal.SIG_DFL
-
-    assert supervise_launch(
-        ["bede-mpirun", "worker"],
-        {"PATH": "/usr/bin"},
-        popen=popen,
-        set_signal_handler=set_signal_handler,
-    ) == 7
-    assert calls == [(["bede-mpirun", "worker"], {"PATH": "/usr/bin"})]
-
-
-def test_supervise_launch_treats_requested_shutdown_as_success():
-    handlers = {}
-
-    class RunningProcess:
-        terminated = False
-
-        def poll(self):
-            return None
-
-        def terminate(self):
-            self.terminated = True
-
-        def wait(self):
-            handlers[signal.SIGTERM](signal.SIGTERM, None)
-            return 143
-
-    process = RunningProcess()
-
-    def popen(_command, env):
-        assert env["PATH"] == "/usr/bin"
-        return process
-
-    def set_signal_handler(signum, handler):
-        previous = handlers.get(signum, signal.SIG_DFL)
-        handlers[signum] = handler
-        return previous
-
-    assert supervise_launch(
-        ["bede-mpirun", "worker"],
-        {"PATH": "/usr/bin"},
-        popen=popen,
-        set_signal_handler=set_signal_handler,
-    ) == 0
-    assert process.terminated

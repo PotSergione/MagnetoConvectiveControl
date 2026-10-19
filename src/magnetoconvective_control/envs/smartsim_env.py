@@ -47,9 +47,11 @@ WALL_CHANNELS = ("yMinus", "yPlus", "xPlus")
 ACTION_LOW = -0.25
 ACTION_HIGH = 0.25
 ACTION_SEQUENCE_KEY = "nekrs:actionSequence"
+SHUTDOWN_KEY = "nekrs:shutdown"
 MODEL_TENSOR_KEYS = (
     ACTION_KEY,
     ACTION_SEQUENCE_KEY,
+    SHUTDOWN_KEY,
     *(
         RANK_ZERO_PREFIX + wall + suffix
         for wall in WALL_CHANNELS
@@ -708,6 +710,10 @@ class SmartSimVecEnv:
             self._database_key(model_name, ACTION_SEQUENCE_KEY),
             np.asarray([0], dtype=np.int64),
         )
+        self.client.put_tensor(
+            self._database_key(model_name, SHUTDOWN_KEY),
+            np.asarray([0], dtype=np.int64),
+        )
         self.exp.start(model, block=False, summary=False)
 
     def _select_snapshot(self, env_id: int = 0) -> Path:
@@ -1026,6 +1032,46 @@ class SmartSimVecEnv:
             f"preserved model directories for: {failed_models}"
         ) from failures[-1]
 
+    def _gracefully_stop_bede_sim(self, env_id: int, model) -> bool:
+        """Ask a blocked Bede worker to finalize MPI and exit successfully."""
+        try:
+            status = str(self.exp.get_status(model)[0]).upper()
+            if status.endswith("COMPLETED"):
+                return True
+            if status.endswith(("FAILED", "CANCELLED")):
+                return False
+
+            # Shutdown is committed by the sequence write, exactly like a
+            # regular action.  It releases the UDF's blocking exchange and
+            # asks NekRS to finish through its normal final-step path.
+            self.client.put_tensor(
+                self._database_key(model.name, SHUTDOWN_KEY),
+                np.asarray([1], dtype=np.int64),
+            )
+            self.client.put_tensor(
+                self._database_key(model.name, ACTION_KEY),
+                self._last_actions[env_id].copy(),
+            )
+            self._action_sequences[env_id] += 1
+            self.client.put_tensor(
+                self._database_key(model.name, ACTION_SEQUENCE_KEY),
+                np.asarray(
+                    [self._action_sequences[env_id]], dtype=np.int64
+                ),
+            )
+
+            deadline = time.monotonic() + 30.0
+            while time.monotonic() < deadline:
+                status = str(self.exp.get_status(model)[0]).upper()
+                if status.endswith("COMPLETED"):
+                    return True
+                if status.endswith(("FAILED", "CANCELLED")):
+                    return False
+                time.sleep(self.poll_interval)
+        except Exception:
+            return False
+        return False
+
     def _cleanup_sim(self, env_id: int, preserve_directory: bool = False) -> None:
         """Release one episode's process, database, and filesystem resources.
 
@@ -1037,12 +1083,18 @@ class SmartSimVecEnv:
         if model is None:
             return
 
-        try:
-            self.exp.stop(model)
-        except Exception:
-            # Completed models are already absent from the launcher. Cleanup
-            # must still continue so their database entries do not accumulate.
-            pass
+        stopped_cleanly = (
+            self.launcher == "bede_mpirun"
+            and self._gracefully_stop_bede_sim(env_id, model)
+        )
+        if not stopped_cleanly:
+            try:
+                self.exp.stop(model)
+            except Exception:
+                # Completed models are already absent from the launcher.
+                # Cleanup must still continue so their database entries do not
+                # accumulate.
+                pass
 
         for key in MODEL_TENSOR_KEYS:
             database_key = self._database_key(model.name, key)
