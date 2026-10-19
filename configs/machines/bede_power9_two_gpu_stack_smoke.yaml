@@ -1,8 +1,8 @@
 launcher:
   # SmartSim supervises locally while Bede's supported MPI wrapper places one
-  # independent NekMHD process on each allocated POWER9/V100 node.
+  # independent NekMHD process on each allocated POWER9/V100 node. The batch
+  # launcher supplies its resolved absolute path through MCC_BEDE_MPIRUN.
   type: bede_mpirun
-  mpi_command: bede-mpirun
   cpus_per_simulation: 4
   simulations_per_gpu: 1
   gpu_resource: gpu:1

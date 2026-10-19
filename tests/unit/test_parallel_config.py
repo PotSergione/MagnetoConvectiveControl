@@ -214,6 +214,7 @@ def test_bede_power9_stack_smoke_is_one_gpu_one_update():
 
 def test_bede_power9_two_gpu_stack_smoke_is_multi_node_one_update(monkeypatch):
     monkeypatch.setenv("SMARTSIM_INTERFACE", "fabric0")
+    monkeypatch.setenv("MCC_BEDE_MPIRUN", "/opt/bede/bin/bede-mpirun")
     config = compose(
         PROJECT_ROOT / "configs/experiments/stack_smoke_two_gpu.yaml",
         PROJECT_ROOT,
@@ -227,7 +228,9 @@ def test_bede_power9_two_gpu_stack_smoke_is_multi_node_one_update(monkeypatch):
     assert plan.nodes == 2
     assert plan.gpus_per_node == 1
     assert config["launcher"]["type"] == "bede_mpirun"
-    assert config["launcher"]["mpi_command"] == "bede-mpirun"
+    assert "mpi_command" not in config["launcher"]
+    export_compatibility_environment(config)
+    assert os.environ["MCC_BEDE_MPIRUN"] == "/opt/bede/bin/bede-mpirun"
     assert "smartsim" not in config
     assert config["runtime"]["startup_timeout"] == 1200
     assert config["training"]["total_timesteps"] == 40
@@ -235,6 +238,7 @@ def test_bede_power9_two_gpu_stack_smoke_is_multi_node_one_update(monkeypatch):
 
 def test_bede_two_gpu_stack_smoke_is_multi_node_one_update(monkeypatch):
     monkeypatch.setenv("SMARTSIM_INTERFACE", "fabric0")
+    monkeypatch.setenv("MCC_BEDE_MPIRUN", "/opt/bede/bin/bede-mpirun")
     config = compose(
         PROJECT_ROOT / "configs/experiments/stack_smoke_two_gpu.yaml",
         PROJECT_ROOT,
@@ -247,7 +251,9 @@ def test_bede_two_gpu_stack_smoke_is_multi_node_one_update(monkeypatch):
     assert plan.required_gpus == 2
     assert plan.nodes == 2
     assert config["launcher"]["type"] == "bede_mpirun"
-    assert config["launcher"]["mpi_command"] == "bede-mpirun"
+    assert "mpi_command" not in config["launcher"]
+    export_compatibility_environment(config)
+    assert os.environ["MCC_BEDE_MPIRUN"] == "/opt/bede/bin/bede-mpirun"
     assert "smartsim" not in config
     assert config["ppo"] == {
         "rollout_steps": 2,
