@@ -90,6 +90,41 @@ its job-local SmartSim case copies and TensorBoard events, retaining compact
 configuration, metadata, reward metrics and the reload-validated PPO checkpoint
 under `MCC_STORAGE_ROOT/smoke/mcc-stack-JOBID/artifacts/bede_stack_smoke`.
 
+## One-GPU Bede POWER9/V100 stack smoke
+
+The original Bede GPU nodes are `ppc64le` POWER9 systems with V100 GPUs, so
+they cannot share executables, Python environments, or generated kernel caches
+with the aarch64 GH nodes. The dedicated launcher uses the native installation
+under `MCC_STORAGE_ROOT/ppc64le`, the validated GCC 10.2/CUDA 12.0.1/OpenMPI
+4.0.5 module combination, and architecture-specific OCCA/NekRS caches.
+
+Its default paths are:
+
+- Conda base: `MCC_STORAGE_ROOT/ppc64le/miniconda`
+- Conda environment: `MCC_STORAGE_ROOT/ppc64le/miniconda/envs/mcc-stack-probe`
+- NekMHD: `MCC_STORAGE_ROOT/ppc64le/nekrs-mhd`
+- Generated caches: `MCC_STORAGE_ROOT/ppc64le/cache`
+
+As with the GH launcher, `MCC_CONDA_BASE`, `MCC_CONDA_ENV`, `NEKRS_HOME`, and
+`MCC_CACHE_ROOT` can override those defaults. Submit from a POWER login node
+with ordinary `sbatch`; do not load or purge compiler modules in the submission
+shell:
+
+```bash
+cd "$HOME/MagnetoConvectiveControl"
+git pull --ff-only
+
+export MCC_STORAGE_ROOT=/nobackup/projects/PROJECT/USER
+sbatch -A PROJECT cluster/slurm/bede_power9_stack_smoke.slurm
+```
+
+The job requests one V100 from the 30-minute `test` partition. It validates the
+native libraries, snapshot restart, SmartSim exchange, two CFD transitions,
+one PPO update, and checkpoint reload. It retains only compact artifacts under
+`MCC_STORAGE_ROOT/smoke/mcc-power9-stack-JOBID/artifacts/bede_stack_smoke`
+after success; failed worker directories and logs remain available for
+diagnosis.
+
 ### Two-node/two-GPU integration smoke
 
 The two-GPU Bede launcher requests one GH200 on each of two nodes. Inside the

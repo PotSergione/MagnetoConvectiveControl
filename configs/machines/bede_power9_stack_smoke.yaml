@@ -1,0 +1,15 @@
+launcher:
+  # sbatch has already placed the controller on the allocated POWER9 node.
+  # Keep SmartSim and the sole NekMHD worker local for this one-GPU smoke test.
+  type: local
+  cpus_per_simulation: 4
+  simulations_per_gpu: 1
+  gpu_resource: gpu:1
+
+# The database and simulation share one POWER9/V100 node.
+smartsim:
+  interface: lo
+
+runtime:
+  # The first run may need to JIT-compile the V100 kernels.
+  startup_timeout: 1200

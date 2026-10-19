@@ -193,6 +193,25 @@ def test_bede_stack_smoke_is_one_gpu_one_update():
     assert config["training"]["total_timesteps"] == 20
 
 
+def test_bede_power9_stack_smoke_is_one_gpu_one_update():
+    config = compose(
+        PROJECT_ROOT / "configs/experiments/stack_smoke.yaml",
+        PROJECT_ROOT,
+        PROJECT_ROOT / "configs/machines/bede_power9_stack_smoke.yaml",
+        PROJECT_ROOT / "configs/scales/one_gpu.yaml",
+    )
+    plan = parallel_plan(config)
+
+    assert plan.physical_environments == 1
+    assert plan.required_gpus == 1
+    assert plan.nodes == 1
+    assert config["launcher"]["type"] == "local"
+    assert config["launcher"]["cpus_per_simulation"] == 4
+    assert config["smartsim"]["interface"] == "lo"
+    assert config["runtime"]["startup_timeout"] == 1200
+    assert config["training"]["total_timesteps"] == 20
+
+
 def test_bede_two_gpu_stack_smoke_is_multi_node_one_update(monkeypatch):
     monkeypatch.setenv("SMARTSIM_INTERFACE", "fabric0")
     config = compose(
