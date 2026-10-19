@@ -52,13 +52,20 @@ require_file "${conda_base}/etc/profile.d/conda.sh"
 require_executable "${conda_env}/bin/python"
 require_executable "${NEKRS_HOME}/bin/nrsmpi"
 
-# Bede exposes its site launcher through the batch environment. Its directory
-# is removed from PATH by `module purge`, so resolve the absolute path first.
+# Bede exposes its site launcher and Slurm client through the batch environment.
+# Their directory is removed from PATH by `module purge`, so preserve it for
+# bede-mpirun's OpenMPI Slurm process launcher.
 bede_mpirun_command="${MCC_BEDE_MPIRUN:-$(command -v bede-mpirun || true)}"
 if [[ -z "${bede_mpirun_command}" || ! -x "${bede_mpirun_command}" ]]; then
     echo "Required command not found before module purge: bede-mpirun" >&2
     exit 1
 fi
+srun_command="$(command -v srun || true)"
+if [[ -z "${srun_command}" || ! -x "${srun_command}" ]]; then
+    echo "Required command not found before module purge: srun" >&2
+    exit 1
+fi
+scheduler_bin="$(dirname "${srun_command}")"
 
 module purge
 module load gcc/10.2.0
@@ -78,11 +85,12 @@ export PYTHONNOUSERSITE=1
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS=1
 
-export PATH="${NEKRS_HOME}/bin:${PATH}"
+export PATH="${scheduler_bin}:${NEKRS_HOME}/bin:${PATH}"
 require_command mpicc
 require_command mpic++
 require_command mpifort
 require_command cmake
+require_command srun
 export CC="$(command -v mpicc)"
 export CXX="$(command -v mpic++)"
 export FC="$(command -v mpifort)"
@@ -189,6 +197,7 @@ echo "SmartSim interface: ${SMARTSIM_INTERFACE}"
 echo "Controller address: ${controller_ip}"
 echo "Worker hosts:       ${MCC_BEDE_HOSTS}"
 echo "MPI launcher:       ${MCC_BEDE_MPIRUN}"
+echo "Slurm launcher:     $(command -v srun)"
 echo "Arch:               $(uname -m)"
 echo "Commit:             $(git -C "${project_root}" rev-parse HEAD)"
 echo "Work:               ${work_dir}"
