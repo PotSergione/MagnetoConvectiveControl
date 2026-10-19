@@ -108,6 +108,16 @@ def test_static_solver_python_contract():
     assert '"NUMBER TIMESTEPS", std::to_string(tstep + 1)' in udf
     assert 'MPI_Allgatherv' in udf
     assert 'MPI_Bcast' in udf
+    wall_integrals = udf[
+        udf.index("static std::array<dfloat, 4> integratedWallHeatFluxes"):
+        udf.index("struct ObservedWallData")
+    ]
+    assert wall_integrals.count("surfaceAreaNormalMultiplyIntegrate(") == 4
+    assert "offset, 1, o_xMinusBoundary" in wall_integrals
+    assert "offset, 1, o_xPlusBoundary" in wall_integrals
+    assert "offset, 1, o_yMinusBoundary" in wall_integrals
+    assert "offset, 1, o_yPlusBoundary" in wall_integrals
+    assert "o_wallBoundaries" not in wall_integrals
     publish = udf[udf.index("static void publishToRedis"):udf.index("static void fetchNextAction")]
     assert publish.index("if (redisRank != 0) return;") < publish.index("ensureRedisClient();")
     assert publish.index("ensureRedisClient();") < publish.index("redisClient->put_tensor")

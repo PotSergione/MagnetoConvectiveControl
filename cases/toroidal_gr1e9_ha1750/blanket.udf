@@ -202,23 +202,47 @@ static std::array<dfloat, 4> integratedWallHeatFluxes()
   oogs::startFinish(o_gradT, mesh->dim, offset, ogsDfloat, ogsAdd, nrs->gsh);
   platform->linAlg->axmyVector(N, offset, 0, 1.0, mesh->o_invAJw, o_gradT);
 
-  // Boundary IDs are 1=x-, 2=x+, 3=y-, and 4=y+.  NekRS supplies the
-  // outward normal and surface GLL weights.  Multiplication by -kappa gives
-  // outward conductive heat flow, positive when heat leaves the fluid.
-  static deviceMemory<int> o_wallBoundaries;
-  if (!o_wallBoundaries.isInitialized()) {
-    o_wallBoundaries.resize(4);
-    o_wallBoundaries.copyFrom(std::vector<int>{1, 2, 3, 4});
+  // NekRS v24 returns one reduction result per call here, even when the
+  // boundary list contains several IDs. Query each wall independently so the
+  // diagnostics have a stable four-entry layout on every supported machine.
+  static deviceMemory<int> o_xMinusBoundary;
+  static deviceMemory<int> o_xPlusBoundary;
+  static deviceMemory<int> o_yMinusBoundary;
+  static deviceMemory<int> o_yPlusBoundary;
+
+  if (!o_xMinusBoundary.isInitialized()) {
+    o_xMinusBoundary.resize(1);
+    o_xPlusBoundary.resize(1);
+    o_yMinusBoundary.resize(1);
+    o_yPlusBoundary.resize(1);
+
+    o_xMinusBoundary.copyFrom(std::vector<int>{1});
+    o_xPlusBoundary.copyFrom(std::vector<int>{2});
+    o_yMinusBoundary.copyFrom(std::vector<int>{3});
+    o_yPlusBoundary.copyFrom(std::vector<int>{4});
   }
 
-  const auto integrals =
-    mesh->surfaceAreaNormalMultiplyIntegrate(offset, 4, o_wallBoundaries, o_gradT);
-  return {
-    -thermalSourceCoeff * integrals.at(0),
-    -thermalSourceCoeff * integrals.at(1),
-    -thermalSourceCoeff * integrals.at(2),
-    -thermalSourceCoeff * integrals.at(3),
-  };
+  const dfloat fluxXMinus =
+    -thermalSourceCoeff *
+    mesh->surfaceAreaNormalMultiplyIntegrate(
+      offset, 1, o_xMinusBoundary, o_gradT).at(0);
+
+  const dfloat fluxXPlus =
+    -thermalSourceCoeff *
+    mesh->surfaceAreaNormalMultiplyIntegrate(
+      offset, 1, o_xPlusBoundary, o_gradT).at(0);
+
+  const dfloat fluxYMinus =
+    -thermalSourceCoeff *
+    mesh->surfaceAreaNormalMultiplyIntegrate(
+      offset, 1, o_yMinusBoundary, o_gradT).at(0);
+
+  const dfloat fluxYPlus =
+    -thermalSourceCoeff *
+    mesh->surfaceAreaNormalMultiplyIntegrate(
+      offset, 1, o_yPlusBoundary, o_gradT).at(0);
+
+  return {fluxXMinus, fluxXPlus, fluxYMinus, fluxYPlus};
 }
 
 struct ObservedWallData
