@@ -1,8 +1,9 @@
 """Launch one generated NekRS case on a selected Bede GPU node.
 
-SmartSim supervises this adapter with its local launcher.  The adapter replaces
-itself with ``bede-mpirun`` so process status, signals, and output continue to
-flow through SmartSim while Bede performs the actual inter-node placement.
+SmartSim supervises this adapter with its local launcher.  The adapter runs
+``bede-mpirun`` while preserving process status and output.  It also translates
+SmartSim's intentional shutdown signal into a successful adapter exit so Bede
+does not mistake normal cleanup for a failed application step.
 """
 
 from __future__ import annotations
@@ -10,8 +11,10 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import signal
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -159,6 +162,47 @@ def build_launch_command(
     return argv
 
 
+def supervise_launch(
+    command: Sequence[str],
+    environment: Mapping[str, str],
+    *,
+    popen=subprocess.Popen,
+    set_signal_handler=signal.signal,
+) -> int:
+    """Run a Bede worker and make an intentional stop report success.
+
+    Unexpected worker failures retain their original return code.  During
+    normal environment cleanup SmartSim terminates this adapter; forwarding
+    that signal to ``bede-mpirun`` and returning zero keeps Slurm from marking
+    an otherwise successful training job as failed.
+    """
+    child = None
+    stop_requested = False
+
+    def request_stop(signum, _frame) -> None:
+        nonlocal stop_requested
+        stop_requested = True
+        if child is not None and child.poll() is None:
+            try:
+                child.terminate()
+            except ProcessLookupError:
+                pass
+
+    handled_signals = (signal.SIGTERM, signal.SIGINT)
+    previous_handlers = {
+        signum: set_signal_handler(signum, request_stop)
+        for signum in handled_signals
+    }
+    try:
+        child = popen(list(command), env=dict(environment))
+        return_code = child.wait()
+    finally:
+        for signum, previous_handler in previous_handlers.items():
+            set_signal_handler(signum, previous_handler)
+
+    return 0 if stop_requested else return_code
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("executable", help="Generated case executable")
@@ -180,7 +224,7 @@ def main() -> None:
         f"Launching Bede worker on {host}: {shlex.join(command)}",
         flush=True,
     )
-    os.execvpe(command[0], command, os.environ.copy())
+    raise SystemExit(supervise_launch(command, os.environ))
 
 
 if __name__ == "__main__":
