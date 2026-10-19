@@ -52,6 +52,14 @@ require_file "${conda_base}/etc/profile.d/conda.sh"
 require_executable "${conda_env}/bin/python"
 require_executable "${NEKRS_HOME}/bin/nrsmpi"
 
+# Bede exposes its site launcher through the batch environment. Its directory
+# is removed from PATH by `module purge`, so resolve the absolute path first.
+bede_mpirun_command="${MCC_BEDE_MPIRUN:-$(command -v bede-mpirun || true)}"
+if [[ -z "${bede_mpirun_command}" || ! -x "${bede_mpirun_command}" ]]; then
+    echo "Required command not found before module purge: bede-mpirun" >&2
+    exit 1
+fi
+
 module purge
 module load gcc/10.2.0
 module load cuda/12.0.1
@@ -84,8 +92,7 @@ export NEKRS_UDF_LIBS="${conda_env}/lib/libsmartredis.so"
 require_file "${conda_env}/include/client.h"
 require_file "${conda_env}/lib/libsmartredis.so"
 
-require_command bede-mpirun
-export MCC_BEDE_MPIRUN="$(command -v bede-mpirun)"
+export MCC_BEDE_MPIRUN="${bede_mpirun_command}"
 
 # Discover exactly one short host name per allocated node through Bede's MPI
 # wrapper. This does not rely on Slurm client commands from compute nodes.
