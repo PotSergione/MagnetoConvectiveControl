@@ -44,8 +44,9 @@ them; it does not assume a site-specific network-device name. It uses
 `bede-mpirun` for both allocation discovery and one-worker-per-node placement,
 without requiring Slurm client commands on the aarch64 nodes. The original
 POWER9/V100 nodes have their own one-GPU launcher,
-`bede_power9_stack_smoke.slurm`, and isolated ppc64le installation and cache
-defaults. See `docs/running_on_slurm.md` for submission and dependency
+`bede_power9_stack_smoke.slurm`, plus the genuine two-node integration launcher
+`bede_power9_two_gpu_stack_smoke.slurm`. Both use isolated ppc64le installation
+and cache defaults. See `docs/running_on_slurm.md` for submission and dependency
 examples.
 
 The one-GPU Bede job uses SmartSim's local launcher inside its allocation;

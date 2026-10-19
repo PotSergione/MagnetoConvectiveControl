@@ -125,7 +125,33 @@ one PPO update, and checkpoint reload. It retains only compact artifacts under
 after success; failed worker directories and logs remain available for
 diagnosis.
 
-### Two-node/two-GPU integration smoke
+### Two-node/two-V100 POWER9 integration smoke
+
+After the one-GPU test has warmed the POWER9 kernel caches, the dedicated
+two-node launcher runs two independent NekMHD environments concurrently. It
+discovers its two allocated POWER9 hosts with `bede-mpirun`, derives the
+routable SmartSim interface from the controller-to-peer route, verifies one
+V100 on each node, and then performs one 40-sample PPO update.
+
+Queue it behind the successful one-GPU job, or submit it directly once that
+job has completed:
+
+```bash
+cd "$HOME/MagnetoConvectiveControl"
+git pull --ff-only
+
+export MCC_STORAGE_ROOT=/nobackup/projects/PROJECT/USER
+sbatch -A PROJECT \
+  cluster/slurm/bede_power9_two_gpu_stack_smoke.slurm
+```
+
+The successful run retains compact artifacts under
+`MCC_STORAGE_ROOT/smoke/mcc-power9-2gpu-stack-JOBID/artifacts/bede_two_gpu_stack_smoke`.
+It proves two-node routing and parallel data harvesting; the two NekMHD workers
+remain isolated one-rank simulations rather than forming a distributed CFD
+calculation.
+
+### Two-node/two-GPU GH integration smoke
 
 The two-GPU Bede launcher requests one GH200 on each of two nodes. Inside the
 allocation it uses `bede-mpirun` to discover both nodes, resolves the peer,

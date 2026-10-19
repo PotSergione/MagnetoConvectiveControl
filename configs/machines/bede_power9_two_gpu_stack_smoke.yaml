@@ -1,0 +1,13 @@
+launcher:
+  # SmartSim supervises locally while Bede's supported MPI wrapper places one
+  # independent NekMHD process on each allocated POWER9/V100 node.
+  type: bede_mpirun
+  mpi_command: bede-mpirun
+  cpus_per_simulation: 4
+  simulations_per_gpu: 1
+  gpu_resource: gpu:1
+
+# The batch launcher discovers and exports SMARTSIM_INTERFACE from the route
+# between its allocated POWER9 nodes.
+runtime:
+  startup_timeout: 1200
