@@ -213,18 +213,39 @@ echo "Artifacts:          ${MCC_ARTIFACT_ROOT}"
 module list
 
 # Validate architecture, route and one allocated V100 on both worker nodes
-# through the same placement mechanism used by the simulations.
-"${MCC_BEDE_MPIRUN}" \
-    --bede-par 1ppn:none \
-    -x SMARTSIM_INTERFACE \
-    bash -c '
-        set -euo pipefail
-        test "$(uname -m)" = ppc64le
-        test -d "/sys/class/net/${SMARTSIM_INTERFACE}"
-        echo "host=$(hostname) arch=$(uname -m) interface=${SMARTSIM_INTERFACE}"
-        ip -o -4 addr show dev "${SMARTSIM_INTERFACE}" scope global
-        nvidia-smi -L
-    '
+# through direct executables. POWER9's site wrapper does not preserve quoted
+# `bash -c` command strings, so remote probes must not depend on shell parsing.
+arch_probe="$("${MCC_BEDE_MPIRUN}" --bede-par 1ppn:none /bin/uname -m)"
+arch_count="$(awk '{for (i = 1; i <= NF; i++) if ($i ~ /ppc64le/) n++} END {print n + 0}' <<<"${arch_probe}")"
+if [[ "${arch_count}" -ne 2 ]]; then
+    echo "Expected ppc64le from both allocated nodes, received:" >&2
+    echo "${arch_probe}" >&2
+    exit 1
+fi
+
+ip_command="$(command -v ip)"
+interface_probe="$(
+    "${MCC_BEDE_MPIRUN}" --bede-par 1ppn:none \
+        "${ip_command}" -o -4 addr show dev "${SMARTSIM_INTERFACE}" scope global
+)"
+echo "Allocated-node architectures:"
+echo "${arch_probe}"
+echo "Allocated-node interface addresses:"
+echo "${interface_probe}"
+
+nvidia_smi_command="$(command -v nvidia-smi)"
+gpu_probe="$(
+    "${MCC_BEDE_MPIRUN}" --bede-par 1ppn:none \
+        "${nvidia_smi_command}" --query-gpu=name --format=csv,noheader
+)"
+v100_count="$(awk '/V100/ {n++} END {print n + 0}' <<<"${gpu_probe}")"
+if [[ "${v100_count}" -ne 2 ]]; then
+    echo "Expected one allocated V100 on each node, received:" >&2
+    echo "${gpu_probe}" >&2
+    exit 1
+fi
+echo "Allocated-node GPUs:"
+echo "${gpu_probe}"
 
 python - <<'PY'
 import platform

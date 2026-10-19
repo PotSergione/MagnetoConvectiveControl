@@ -185,18 +185,40 @@ echo "Commit:             $(git -C "${project_root}" rev-parse HEAD)"
 echo "Work:               ${work_dir}"
 echo "Artifacts:          ${MCC_ARTIFACT_ROOT}"
 
-# Verify through the same launch mechanism used by the workers that the
-# selected interface exists and one allocated GH200 is visible on both nodes.
-"${MCC_BEDE_MPIRUN}" \
-    --bede-par 1ppn:none \
-    -x SMARTSIM_INTERFACE \
-    bash -c '
-        set -euo pipefail
-        test -d "/sys/class/net/${SMARTSIM_INTERFACE}"
-        echo "host=$(hostname) interface=${SMARTSIM_INTERFACE}"
-        ip -o -4 addr show dev "${SMARTSIM_INTERFACE}" scope global
-        nvidia-smi -L
-    '
+# Verify through direct executables that the selected interface exists and one
+# allocated GH200 is visible on both nodes. This also works with Bede wrappers
+# that do not preserve quoted `bash -c` command strings.
+arch_probe="$("${MCC_BEDE_MPIRUN}" --bede-par 1ppn:none /bin/uname -m)"
+arch_count="$(awk '{for (i = 1; i <= NF; i++) if ($i ~ /aarch64/) n++} END {print n + 0}' <<<"${arch_probe}")"
+if [[ "${arch_count}" -ne 2 ]]; then
+    echo "Expected aarch64 from both allocated nodes, received:" >&2
+    echo "${arch_probe}" >&2
+    exit 1
+fi
+
+ip_command="$(command -v ip)"
+interface_probe="$(
+    "${MCC_BEDE_MPIRUN}" --bede-par 1ppn:none \
+        "${ip_command}" -o -4 addr show dev "${SMARTSIM_INTERFACE}" scope global
+)"
+echo "Allocated-node architectures:"
+echo "${arch_probe}"
+echo "Allocated-node interface addresses:"
+echo "${interface_probe}"
+
+nvidia_smi_command="$(command -v nvidia-smi)"
+gpu_probe="$(
+    "${MCC_BEDE_MPIRUN}" --bede-par 1ppn:none \
+        "${nvidia_smi_command}" --query-gpu=name --format=csv,noheader
+)"
+gh200_count="$(awk '/GH200/ {n++} END {print n + 0}' <<<"${gpu_probe}")"
+if [[ "${gh200_count}" -ne 2 ]]; then
+    echo "Expected one allocated GH200 on each node, received:" >&2
+    echo "${gpu_probe}" >&2
+    exit 1
+fi
+echo "Allocated-node GPUs:"
+echo "${gpu_probe}"
 
 python - <<'PY'
 import torch
