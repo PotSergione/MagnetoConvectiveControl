@@ -17,8 +17,6 @@ from typing import Mapping, Sequence
 
 
 _HOST_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*$")
-_HOST_MARKER = "__MCC_HOST__"
-
 # Values required by the NekRS wrapper or SmartRedis client on the remote node.
 # ``-x NAME`` asks Open MPI to copy the value from the adapter environment;
 # absent optional values are deliberately omitted.
@@ -82,9 +80,8 @@ def discover_allocation_hosts(
         *command,
         "--bede-par",
         "1ppn:none",
-        "bash",
-        "-c",
-        f'printf "{_HOST_MARKER}%s\\n" "$(hostname -s)"',
+        "/bin/hostname",
+        "-s",
     ]
     try:
         result = runner(
@@ -103,8 +100,16 @@ def discover_allocation_hosts(
 
     discovered = []
     for line in result.stdout.splitlines():
-        if _HOST_MARKER in line:
-            discovered.append(line.partition(_HOST_MARKER)[2].strip())
+        # Open MPI may label rank output as ``[job,rank]<stdout>:HOST``.
+        # Direct hostname execution avoids shell-quoting differences between
+        # Bede's aarch64 and ppc64le wrappers.
+        candidate = line.rpartition("<stdout>:")[2].strip()
+        if not candidate:
+            candidate = line.strip()
+        if _HOST_PATTERN.fullmatch(candidate) and any(
+            character.isdigit() for character in candidate
+        ):
+            discovered.append(candidate.partition(".")[0])
     try:
         return parse_allocation_hosts(discovered)
     except ValueError as error:

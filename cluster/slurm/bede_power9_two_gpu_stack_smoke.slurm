@@ -105,8 +105,7 @@ export MCC_BEDE_MPIRUN="${bede_mpirun_command}"
 # Discover exactly one short host name per allocated node through Bede's MPI
 # wrapper. This does not rely on Slurm client commands from compute nodes.
 set +e
-host_probe="$("${MCC_BEDE_MPIRUN}" --bede-par 1ppn:none bash -c \
-    'printf "__MCC_HOST__%s\n" "$(hostname -s)"' 2>&1)"
+host_probe="$("${MCC_BEDE_MPIRUN}" --bede-par 1ppn:none /bin/hostname -s)"
 host_probe_status=$?
 set -e
 if [[ ${host_probe_status} -ne 0 ]]; then
@@ -115,8 +114,17 @@ if [[ ${host_probe_status} -ne 0 ]]; then
     exit "${host_probe_status}"
 fi
 mapfile -t allocation_nodes < <(
-    sed -n 's/^.*__MCC_HOST__//p' <<<"${host_probe}" |
-        awk '!seen[$0]++'
+    sed -E 's/^.*<stdout>://' <<<"${host_probe}" |
+        awk '
+            {
+                host = $0
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", host)
+                if (host ~ /^[[:alnum:]][[:alnum:].-]*[[:digit:]][[:alnum:].-]*$/) {
+                    sub(/\..*$/, "", host)
+                    if (!seen[host]++) print host
+                }
+            }
+        '
 )
 if [[ ${#allocation_nodes[@]} -ne 2 ]]; then
     echo "Expected exactly two allocated nodes, found ${#allocation_nodes[@]}" >&2

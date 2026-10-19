@@ -82,8 +82,7 @@ export MCC_BEDE_MPIRUN="$(command -v bede-mpirun)"
 # Slurm's aarch64 client commands are unavailable on the GH compute nodes.
 # Ask Bede's supported MPI wrapper to run one tagged hostname probe per node.
 set +e
-host_probe="$("${MCC_BEDE_MPIRUN}" --bede-par 1ppn:none bash -c \
-    'printf "__MCC_HOST__%s\n" "$(hostname -s)"' 2>&1)"
+host_probe="$("${MCC_BEDE_MPIRUN}" --bede-par 1ppn:none /bin/hostname -s)"
 host_probe_status=$?
 set -e
 if [[ ${host_probe_status} -ne 0 ]]; then
@@ -92,8 +91,17 @@ if [[ ${host_probe_status} -ne 0 ]]; then
     exit "${host_probe_status}"
 fi
 mapfile -t allocation_nodes < <(
-    sed -n 's/^.*__MCC_HOST__//p' <<<"${host_probe}" |
-        awk '!seen[$0]++'
+    sed -E 's/^.*<stdout>://' <<<"${host_probe}" |
+        awk '
+            {
+                host = $0
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", host)
+                if (host ~ /^[[:alnum:]][[:alnum:].-]*[[:digit:]][[:alnum:].-]*$/) {
+                    sub(/\..*$/, "", host)
+                    if (!seen[host]++) print host
+                }
+            }
+        '
 )
 if [[ ${#allocation_nodes[@]} -ne 2 ]]; then
     echo "Expected exactly two allocated nodes, found ${#allocation_nodes[@]}" >&2

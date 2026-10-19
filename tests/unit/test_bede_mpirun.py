@@ -73,8 +73,8 @@ def test_discover_allocation_hosts_accepts_mpi_labeled_output():
             command,
             0,
             stdout=(
-                "[1,0]<stdout>:__MCC_HOST__gh005\n"
-                "[1,1]<stdout>:__MCC_HOST__gh006\n"
+                "gh005\n"
+                "[1,1]<stdout>:gh006.bede.dur.ac.uk\n"
             ),
             stderr="",
         )
@@ -88,6 +88,7 @@ def test_discover_allocation_hosts_accepts_mpi_labeled_output():
         "--bede-par",
         "1ppn:none",
     ]
+    assert calls[0][0][-2:] == ["/bin/hostname", "-s"]
     assert calls[0][1]["timeout"] == 60
 
 
