@@ -653,6 +653,10 @@ class SmartSimVecEnv:
             ]
             env_vars["MCC_BEDE_TARGET_HOST"] = self.allocation_hosts[gpu_id]
             env_vars["MCC_BEDE_MPIRUN"] = self.bede_mpi_command
+            # bede-mpirun already owns the worker's MPI rank.  Tell the case
+            # wrapper to exec NekRS directly instead of nesting another
+            # mpirun through nrsmpi.
+            env_vars["MCC_BEDE_MPI_PARENT"] = "1"
         else:
             raise ValueError(f"Unsupported launcher: {self.launcher}")
 

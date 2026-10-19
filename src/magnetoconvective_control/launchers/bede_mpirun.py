@@ -32,6 +32,7 @@ REMOTE_ENVIRONMENT = (
     "NEKRS_UDF_LIBS",
     "BLANKET_CMAKE",
     "PATH",
+    "MCC_BEDE_MPI_PARENT",
     "LD_LIBRARY_PATH",
     "OMP_NUM_THREADS",
     "PYTHONNOUSERSITE",
@@ -151,7 +152,10 @@ def build_launch_command(
     for name in REMOTE_ENVIRONMENT:
         if name in environment and environment[name]:
             argv.extend(["-x", name])
-    argv.append(str(program))
+    # SmartSim copies generator files without preserving the executable bit.
+    # Invoking the generated case through Bash therefore works on every node
+    # without mutating the generated directory after placement.
+    argv.extend(["/bin/bash", str(program)])
     return argv
 
 

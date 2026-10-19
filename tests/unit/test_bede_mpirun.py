@@ -35,6 +35,7 @@ def test_build_launch_command_targets_one_gpu_rank_and_exports_present_values(
             "SR_DB_TYPE": "STANDALONE",
             "SSKEYIN": "nekrs_env_1_ep_0",
             "PATH": "/usr/bin",
+            "MCC_BEDE_MPI_PARENT": "1",
             "NEKRS_CACHE_DIR": "",  # Empty optional values are not exported.
         },
     )
@@ -60,6 +61,9 @@ def test_build_launch_command_targets_one_gpu_rank_and_exports_present_values(
         "SSKEYIN",
         "-x",
         "PATH",
+        "-x",
+        "MCC_BEDE_MPI_PARENT",
+        "/bin/bash",
         str((tmp_path / "run_case.sh").resolve()),
     ]
 

@@ -16,4 +16,12 @@ export PATH="${local_tools}:${NEKRS_HOME}/bin:${PATH}"
 # noisy X11 authorization diagnostics in locally launched MPI children.
 unset DISPLAY XAUTHORITY
 
+# The Bede multi-node adapter launches this script as an MPI rank.  Replace
+# that shell process with NekRS directly so there is no nested mpirun.  All
+# other launchers retain the established nrsmpi path below.
+if [[ "${MCC_BEDE_MPI_PARENT:-0}" == "1" ]]; then
+    exec > >(tee blanket.log) 2>&1
+    exec "${NEKRS_HOME}/bin/nekrs" --setup blanket
+fi
+
 nrsmpi blanket 1 2>&1 | tee blanket.log
