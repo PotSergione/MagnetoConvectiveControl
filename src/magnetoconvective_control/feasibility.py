@@ -151,7 +151,11 @@ def _snapshot_records(config: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _proposed_plan(root: Path, config: dict[str, Any]) -> dict[str, Any]:
-    identity = merge({}, config)
+    # Only the SmartSim submapping needs changing for the identity hash.  A
+    # top-level shallow copy would alias this mapping and strip port from the
+    # runtime config passed to SmartSimVecEnv.
+    identity = dict(config)
+    identity["smartsim"] = dict(config.get("smartsim", {}))
     identity.get("smartsim", {}).pop("port", None)
     case_dir = Path(config["case"]["executable"]).parent
     source_paths = [
@@ -771,13 +775,28 @@ def run_feasibility(root: Path, config: dict[str, Any], dry_run: bool = False) -
     if plan_path.is_file():
         plan = json.loads(plan_path.read_text())
         if _plan_identity(plan) != _plan_identity(proposed):
-            raise ValueError(f"Existing immutable plan differs: {plan_path}")
+            same_except_code = dict(proposed)
+            same_except_code["code_files"] = plan.get("code_files")
+            completed_blocks = list(output.rglob("COMPLETE"))
+            if (
+                _plan_identity(plan) != _plan_identity(same_except_code)
+                or completed_blocks
+            ):
+                raise ValueError(f"Existing immutable plan differs: {plan_path}")
+            _atomic_json(output / "plan_revision.json", {
+                "updated_utc": _utc(),
+                "reason": "source fix before any trajectory block committed",
+                "previous_code_files": plan.get("code_files"),
+                "current_code_files": proposed.get("code_files"),
+            })
+            _atomic_json(plan_path, proposed)
+            plan = proposed
     else:
         _atomic_json(plan_path, proposed)
         plan = proposed
     _verify_plan(plan)
     resolved = output / "config.resolved.yaml"
-    if not resolved.is_file():
+    if not resolved.is_file() or (output / "plan_revision.json").is_file():
         resolved.write_text(yaml.safe_dump(config, sort_keys=False))
     if dry_run:
         print(yaml.safe_dump(config, sort_keys=False))
