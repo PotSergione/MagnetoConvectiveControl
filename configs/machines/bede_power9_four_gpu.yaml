@@ -7,6 +7,8 @@ launcher:
 
 smartsim:
   interface: lo
+  # Fallback when the per-allocation SMARTSIM_PORT override is unavailable.
+  port: 16780
 
 runtime:
   startup_timeout: 1200
