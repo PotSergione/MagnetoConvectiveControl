@@ -1,0 +1,12 @@
+launcher:
+  # The batch allocation owns one POWER9 node and all four local V100s.
+  type: local
+  cpus_per_simulation: 4
+  simulations_per_gpu: 1
+  gpu_resource: gpu:1
+
+smartsim:
+  interface: lo
+
+runtime:
+  startup_timeout: 1200

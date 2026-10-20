@@ -28,6 +28,12 @@ The campaign must answer, from one reusable dataset:
 The output is a machine-readable design decision, not only a collection of
 plots.
 
+Completed trajectory blocks are atomic and resumable across allocations. The
+campaign persists measured block durations and starts another block only when
+that block plus the configured reserve fits in the active allocation. A clean
+allocation pause is therefore a successful intermediate state, not a failed
+campaign.
+
 ## Statistical unit and accounting
 
 A physical joint action followed by one CFD transition is one physical
@@ -124,6 +130,11 @@ For each arm and paired difference from A1, report:
 Use paired snapshot-block contrasts. Select a provisional reference action
 `a_ref` only if its full-horizon and final-400-transition effects are both
 acceptable. Early transient benefit alone is insufficient.
+
+Stage A retains compact transition tables but not raw wall maps. Raw maps are
+retained for Stage B, where the observation and system-identification analysis
+requires them. Stage C likewise retains compact transition tables, PPO
+diagnostics, and checkpoints without duplicating the raw fields.
 
 Stage A also defines a minimum relevant improvement `delta_min` for the
 learnability gate. Record both the absolute physical threshold and its value

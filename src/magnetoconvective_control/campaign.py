@@ -140,39 +140,62 @@ def _safe_name(value: str) -> str:
     return value
 
 
+class AllocationPause(RuntimeError):
+    """The next atomic block does not fit safely in this allocation."""
+
+
 class TimeBudget:
     def __init__(self, path: Path, hours: float, reserve_hours: float):
         self.path = path
         self.started = time.monotonic()
         self.limit = hours * 3600.0
         self.reserve = reserve_hours * 3600.0
-        self.block_seconds: list[float] = []
+        self.block_seconds: dict[str, float] = {}
+        if path.is_file():
+            saved = json.loads(path.read_text())
+            self.block_seconds = {
+                str(key): float(value)
+                for key, value in saved.get("completed_block_seconds", {}).items()
+            }
 
-    def record(self, seconds: float) -> None:
-        self.block_seconds.append(seconds)
+    def record(self, block: str, seconds: float) -> None:
+        self.block_seconds[block] = float(seconds)
+        saved = json.loads(self.path.read_text()) if self.path.is_file() else {}
+        saved.update({
+            "updated_utc": _utc(),
+            "completed_block_seconds": self.block_seconds,
+        })
+        _atomic_json(self.path, saved)
 
     def require(self, remaining_blocks: int, label: str) -> None:
         elapsed = time.monotonic() - self.started
-        estimate = max(self.block_seconds[-4:] or [1.5 * 3600.0])
-        projected = elapsed + remaining_blocks * estimate + self.reserve
+        recent = list(self.block_seconds.values())[-4:]
+        estimate = max(recent or [1.5 * 3600.0])
+        next_block_projection = elapsed + estimate + self.reserve
+        all_blocks_projection = elapsed + remaining_blocks * estimate + self.reserve
         _atomic_json(self.path, {
             "updated_utc": _utc(), "elapsed_hours": elapsed / 3600.0,
             "conservative_block_hours": estimate / 3600.0,
             "remaining_blocks": remaining_blocks,
-            "projected_hours": projected / 3600.0,
+            "next_block_projected_hours": next_block_projection / 3600.0,
+            "all_remaining_projected_hours": all_blocks_projection / 3600.0,
             "limit_hours": self.limit / 3600.0, "next": label,
+            "completed_block_seconds": self.block_seconds,
         })
-        if projected > self.limit:
-            raise RuntimeError(
-                f"Refusing to start {label}: conservative completion projection "
-                f"is {projected / 3600.0:.2f} h for a {self.limit / 3600.0:.2f} h allocation"
+        if next_block_projection > self.limit:
+            raise AllocationPause(
+                f"Pausing before {label}: the next block plus reserve projects "
+                f"to {next_block_projection / 3600.0:.2f} h in this "
+                f"{self.limit / 3600.0:.2f} h allocation"
             )
 
 
 class TrajectoryWriter:
     """Atomic compact table plus independently compressed raw-map chunks."""
 
-    def __init__(self, directory: Path, chunk_steps: int):
+    def __init__(
+        self, directory: Path, chunk_steps: int, store_raw_maps: bool = True
+    ):
         self.directory = directory
         self.directory.mkdir(parents=True, exist_ok=True)
         self.table_partial = directory / "trajectory.csv.partial"
@@ -180,6 +203,7 @@ class TrajectoryWriter:
         self.writer = csv.DictWriter(self.stream, fieldnames=TRANSITION_FIELDS)
         self.writer.writeheader()
         self.chunk_steps = chunk_steps
+        self.store_raw_maps = store_raw_maps
         self.maps: list[np.ndarray] = []
         self.chunk_start = 1
         self.rows = 0
@@ -187,9 +211,10 @@ class TrajectoryWriter:
     def append(self, row: dict[str, Any], raw_maps: np.ndarray) -> None:
         self.writer.writerow({field: row.get(field, "") for field in TRANSITION_FIELDS})
         self.rows += 1
-        self.maps.append(np.asarray(raw_maps, dtype=np.float32))
-        if len(self.maps) >= self.chunk_steps:
-            self._flush_maps()
+        if self.store_raw_maps:
+            self.maps.append(np.asarray(raw_maps, dtype=np.float32))
+            if len(self.maps) >= self.chunk_steps:
+                self._flush_maps()
 
     def _flush_maps(self) -> None:
         if not self.maps:
@@ -218,6 +243,7 @@ class TrajectoryWriter:
         table = self.directory / "trajectory.csv"
         _atomic_json(self.directory / "manifest.json", {
             "schema_version": 1, "maps": {
+                "enabled": self.store_raw_maps,
                 "dtype": "float32", "per_transition_shape": [3, *WALL_SHAPE],
                 "compression": "gzip", "chunks": chunks,
             },
@@ -284,6 +310,7 @@ def _core_kwargs(runtime: Runtime, snapshot: Path, max_episode_steps=None) -> di
     config = runtime.config
     launcher = config["launcher"]
     reward = config["reward"]
+    runtime_config = config.get("runtime", {})
     return {
         "n_envs": 4,
         "simulations_per_gpu": 1,
@@ -302,6 +329,12 @@ def _core_kwargs(runtime: Runtime, snapshot: Path, max_episode_steps=None) -> di
         "ewma_timescale": float(reward.get("ewma_timescale", 10.0)),
         "action_magnitude_regularization": 0.0,
         "action_slew_regularization": 0.0,
+        "occa_cache_dir": runtime_config.get(
+            "occa_cache", os.environ.get("RL_OCCA_CACHE_DIR")
+        ),
+        "nekrs_cache_dir": runtime_config.get(
+            "nekrs_cache", os.environ.get("RL_NEKRS_CACHE_DIR")
+        ),
     }
 
 
@@ -329,8 +362,13 @@ def _run_open_loop_block(
     })
     work = attempt / "work"
     work.mkdir()
+    store_raw_maps = stage in {"preflight", "stage_b"}
     writers = {
-        arm: TrajectoryWriter(attempt / arm, runtime.config["campaign"]["raw_chunk_steps"])
+        arm: TrajectoryWriter(
+            attempt / arm,
+            runtime.config["campaign"]["raw_chunk_steps"],
+            store_raw_maps=store_raw_maps,
+        )
         for arm in arm_names
     }
     mapping = _arm_mapping(block)
@@ -428,15 +466,21 @@ def run_stage_a(runtime: Runtime) -> dict[str, Any]:
     table = np.repeat(table, N_ELECTRODES, axis=2)
     names = [f"A{index}" for index in range(4)]
     for block, record in enumerate(runtime.plan["snapshots"]):
-        runtime.budget.require(
-            (len(runtime.plan["snapshots"]) - block) + 8 + 10,
-            f"Stage A block {block}",
-        )
+        if _completed_attempt(
+            runtime.output / "stage_a" / f"block_{block:03d}"
+        ) is None:
+            runtime.budget.require(
+                (len(runtime.plan["snapshots"]) - block) + 8 + 10,
+                f"Stage A block {block}",
+            )
         started = time.monotonic()
         attempt = _run_open_loop_block(
             runtime, "stage_a", block, Path(record["path"]), names, table
         )
-        runtime.budget.record(_attempt_seconds(attempt, time.monotonic() - started))
+        runtime.budget.record(
+            f"stage_a:{block}",
+            _attempt_seconds(attempt, time.monotonic() - started),
+        )
 
     data = _paired_stage_rows(runtime, "stage_a")
     zero_index = int(np.argmin(np.abs(amplitudes)))
@@ -745,15 +789,21 @@ def run_stage_b(runtime: Runtime, decision_a: dict[str, Any]) -> dict[str, Any]:
     names, table, sequence_metadata = _stage_b_actions(runtime, decision_a)
     _atomic_json(runtime.output / "manifests" / "stage_b_sequences.json", sequence_metadata)
     for block, record in enumerate(runtime.plan["snapshots"]):
-        runtime.budget.require(
-            (len(runtime.plan["snapshots"]) - block) + 10,
-            f"Stage B block {block}",
-        )
+        if _completed_attempt(
+            runtime.output / "stage_b" / f"block_{block:03d}"
+        ) is None:
+            runtime.budget.require(
+                (len(runtime.plan["snapshots"]) - block) + 10,
+                f"Stage B block {block}",
+            )
         started = time.monotonic()
         attempt = _run_open_loop_block(
             runtime, "stage_b", block, Path(record["path"]), names, table
         )
-        runtime.budget.record(_attempt_seconds(attempt, time.monotonic() - started))
+        runtime.budget.record(
+            f"stage_b:{block}",
+            _attempt_seconds(attempt, time.monotonic() - started),
+        )
 
     data = _paired_stage_rows(runtime, "stage_b")
     impulse_by_block = []
@@ -940,7 +990,11 @@ class ModalCampaignVecEnv:
                 self.pending_modal = None
                 self.pending_physical = None
                 self.writers = [
-                    TrajectoryWriter(attempt / f"env_{env_id}_{path.name}", runtime.config["campaign"]["raw_chunk_steps"])
+                    TrajectoryWriter(
+                        attempt / f"env_{env_id}_{path.name}",
+                        runtime.config["campaign"]["raw_chunk_steps"],
+                        store_raw_maps=False,
+                    )
                     for env_id, path in enumerate(snapshots)
                 ]
                 self.completed = [False] * 4
@@ -1387,7 +1441,10 @@ def run_stage_c(runtime: Runtime, decision_a: dict[str, Any], decision_b: dict[s
             expected = current_complete / "model_after.zip"
             if not latest.is_file() or _sha256(latest) != _sha256(expected):
                 _atomic_copy(expected, latest)
-            runtime.budget.record(_attempt_seconds(current_complete, 1.5 * 3600.0))
+            runtime.budget.record(
+                f"stage_c:{rollout}",
+                _attempt_seconds(current_complete, 1.5 * 3600.0),
+            )
             continue
         completed_models = []
         for previous in range(rollout):
@@ -1411,6 +1468,7 @@ def run_stage_c(runtime: Runtime, decision_a: dict[str, Any], decision_b: dict[s
             runtime.output / "stage_c" / f"rollout_{rollout:03d}"
         )
         runtime.budget.record(
+            f"stage_c:{rollout}",
             _attempt_seconds(completed, time.monotonic() - started)
         )
     return _analyse_stage_c(runtime, decision_a, decision_b)
@@ -1747,6 +1805,14 @@ def main() -> None:
     try:
         output = run_campaign(root, config, dry_run=args.dry_run)
         print(output)
+    except AllocationPause as error:
+        if output_hint.is_dir():
+            _atomic_json(output_hint / "state.json", {
+                "state": "PAUSED_ALLOCATION", "updated_utc": _utc(),
+                "message": str(error),
+            })
+        print(f"Campaign paused cleanly: {error}", flush=True)
+        raise SystemExit(0) from error
     except KeyboardInterrupt as error:
         if output_hint.is_dir():
             _atomic_json(output_hint / "state.json", {

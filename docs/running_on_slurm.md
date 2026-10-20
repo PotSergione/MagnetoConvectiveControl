@@ -125,6 +125,41 @@ one PPO update, and checkpoint reload. It retains only compact artifacts under
 after success; failed worker directories and logs remain available for
 diagnosis.
 
+### V100 timing probes
+
+The one- and four-V100 timing launchers advance the existing
+`blanket0.f00260` restart through 100 zero-action control transitions. The
+four-GPU form places four independent workers on one POWER9 node and measures
+the contention relevant to the design campaign:
+
+```bash
+export MCC_STORAGE_ROOT=/nobackup/projects/PROJECT/USER
+sbatch -A PROJECT cluster/slurm/bede_power9_v100_timing.slurm
+sbatch -A PROJECT cluster/slurm/bede_power9_four_v100_timing.slurm
+```
+
+On success each job removes transient SmartSim files and retains one
+`timing.json` under `MCC_STORAGE_ROOT/smoke/mcc-power9-*timing-JOBID`.
+
+### Four-V100 design campaign
+
+The Bede campaign uses all four V100s on one POWER9 node. Set the same durable
+artifact root on every submission; completed blocks and measured block times
+are reused automatically:
+
+```bash
+export MCC_STORAGE_ROOT=/nobackup/projects/PROJECT/USER
+export MCC_DESIGN_SNAPSHOTS_DIR=/path/to/eight/design/snapshots
+export MCC_ARTIFACT_ROOT=/nobackup/projects/PROJECT/USER/campaigns
+
+sbatch -A PROJECT cluster/slurm/bede_power9_four_gpu_campaign.slurm
+```
+
+If the next atomic block plus the five-hour reserve does not fit, the command
+records `PAUSED_ALLOCATION` and exits successfully. Submit the same command
+again to continue. Raw wall maps are durable only for the preflight and Stage
+B identification data; Stages A and C retain compact trajectory tables.
+
 ### Two-node/two-V100 POWER9 integration smoke
 
 After the one-GPU test has warmed the POWER9 kernel caches, the dedicated

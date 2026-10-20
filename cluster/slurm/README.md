@@ -49,6 +49,12 @@ POWER9/V100 nodes have their own one-GPU launcher,
 and cache defaults. See `docs/running_on_slurm.md` for submission and dependency
 examples.
 
+`bede_power9_v100_timing.slurm` and
+`bede_power9_four_v100_timing.slurm` measure 100 physical transitions with one
+and four local V100 workers. The production counterpart is
+`bede_power9_four_gpu_campaign.slurm`; it resumes completed atomic blocks and
+exits successfully when the next block would violate the allocation reserve.
+
 The one-GPU Bede job uses SmartSim's local launcher inside its allocation;
 `ghbatch` supplies the outer Slurm allocation, while Slurm client commands are
 not available at the aarch64 compute-node call site.
