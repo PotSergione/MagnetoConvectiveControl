@@ -51,6 +51,21 @@ require_file "${conda_base}/etc/profile.d/conda.sh"
 require_executable "${conda_env}/bin/python"
 require_executable "${NEKRS_HOME}/bin/nrsmpi"
 
+# Bede exposes its site launcher and Slurm client through the batch environment.
+# Their directories can be removed from PATH by `module purge`, so preserve
+# both absolute paths for bede-mpirun's OpenMPI Slurm process launcher.
+bede_mpirun_command="${MCC_BEDE_MPIRUN:-$(command -v bede-mpirun || true)}"
+if [[ -z "${bede_mpirun_command}" || ! -x "${bede_mpirun_command}" ]]; then
+    echo "Required command not found before module purge: bede-mpirun" >&2
+    exit 1
+fi
+srun_command="$(command -v srun || true)"
+if [[ -z "${srun_command}" || ! -x "${srun_command}" ]]; then
+    echo "Required command not found before module purge: srun" >&2
+    exit 1
+fi
+scheduler_bin="$(dirname "${srun_command}")"
+
 module purge
 module load gcc/12.2
 module load cuda/12.4.1
@@ -64,20 +79,27 @@ export PYTHONNOUSERSITE=1
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS=1
 
-export PATH="${NEKRS_HOME}/bin:${PATH}"
+if [[ "$(uname -m)" != "aarch64" ]]; then
+    echo "Expected an aarch64 GH200 controller, found $(uname -m)" >&2
+    exit 1
+fi
+
+export PATH="${scheduler_bin}:${NEKRS_HOME}/bin:${PATH}"
 require_command mpicc
 require_command mpic++
 require_command mpifort
 require_command cmake
+require_command srun
 export CC="$(command -v mpicc)"
 export CXX="$(command -v mpic++)"
 export FC="$(command -v mpifort)"
 export BLANKET_CMAKE="$(command -v cmake)"
 export NEKRS_UDF_INCLUDES="${conda_env}/include;${NEKRS_HOME}/udf"
 export NEKRS_UDF_LIBS="${conda_env}/lib/libsmartredis.so"
+require_file "${conda_env}/include/client.h"
+require_file "${conda_env}/lib/libsmartredis.so"
 
-require_command bede-mpirun
-export MCC_BEDE_MPIRUN="$(command -v bede-mpirun)"
+export MCC_BEDE_MPIRUN="${bede_mpirun_command}"
 
 # Slurm's aarch64 client commands are unavailable on the GH compute nodes.
 # Ask Bede's supported MPI wrapper to run one tagged hostname probe per node.
@@ -166,7 +188,7 @@ mkdir -p \
     "${work_dir}"
 ln -sfn "${conda_env}/lib/libsmartredis.so" "${runtime_lib}/libsmartredis.so"
 
-export LD_LIBRARY_PATH="${runtime_lib}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+export LD_LIBRARY_PATH="${runtime_lib}:${conda_env}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 export RL_OCCA_CACHE_DIR="${cache_root}/occa"
 export RL_NEKRS_CACHE_DIR="${cache_root}/nekrs"
 export MCC_ARTIFACT_ROOT="${work_dir}/artifacts"
@@ -180,10 +202,12 @@ echo "SmartSim interface: ${SMARTSIM_INTERFACE}"
 echo "Controller address: ${controller_ip}"
 echo "Worker hosts:       ${MCC_BEDE_HOSTS}"
 echo "MPI launcher:       ${MCC_BEDE_MPIRUN}"
+echo "Slurm launcher:     $(command -v srun)"
 echo "Arch:               $(uname -m)"
 echo "Commit:             $(git -C "${project_root}" rev-parse HEAD)"
 echo "Work:               ${work_dir}"
 echo "Artifacts:          ${MCC_ARTIFACT_ROOT}"
+module list
 
 # Verify through direct executables that the selected interface exists and one
 # allocated GH200 is visible on both nodes. This also works with Bede wrappers
@@ -222,14 +246,21 @@ echo "${gpu_probe}"
 
 python - <<'PY'
 import torch
+import platform
 from importlib.metadata import version
 
+print("Python architecture:", platform.machine())
 print("PyTorch:", torch.__version__)
 print("CUDA build:", torch.version.cuda)
 print("CUDA available on controller:", torch.cuda.is_available())
+if platform.machine() != "aarch64":
+    raise RuntimeError("Python is not running on aarch64")
 if not torch.cuda.is_available():
     raise RuntimeError("PyTorch cannot see the controller node's GH200")
-print("Controller GPU:", torch.cuda.get_device_name())
+gpu = torch.cuda.get_device_name()
+print("Controller GPU:", gpu)
+if "GH200" not in gpu.upper():
+    raise RuntimeError(f"Expected a GH200, found {gpu}")
 print("SmartSim:", version("smartsim"))
 print("SmartRedis:", version("smartredis"))
 PY
@@ -240,11 +271,6 @@ mcc-train \
     --experiment "${project_root}/configs/experiments/stack_smoke_two_gpu.yaml" \
     --machine "${project_root}/configs/machines/bede_two_gpu_stack_smoke.yaml" \
     --scale "${project_root}/configs/scales/two_gpu.yaml"
-
-for env_id in 0 1; do
-    model_dir="${work_dir}/rl_training/nekrs_env_${env_id}_ep_0"
-    test -s "${model_dir}/blanket.log"
-done
 
 python - <<'PY'
 import json
@@ -284,8 +310,9 @@ print("Reloaded PPO checkpoint at", model.num_timesteps, "timesteps")
 print("Persistent artifacts:", run)
 PY
 
-# Preserve generated worker directories on failure. Once both worker logs and
-# the PPO checkpoint have been validated, remove only job-local transient data.
+# Successful workers are removed by the environment after graceful MPI
+# finalization. Retain failed workers for diagnosis, but remove telemetry after
+# the persistent checkpoint has been validated.
 rm -rf -- "${work_dir}/rl_training" "${work_dir}/tensorboard"
 
 echo "MCC BEDE TWO-GPU STACK SMOKE: SUCCESS"
