@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 #SBATCH --job-name=mcc-2gpu-smoke
-#SBATCH --partition=ghtest
+#SBATCH --partition=gh
 #SBATCH --nodes=2
 #SBATCH --gres=gpu:1
 #SBATCH --time=00:30:00
