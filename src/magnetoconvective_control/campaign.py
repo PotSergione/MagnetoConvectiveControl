@@ -944,6 +944,7 @@ class ModalCampaignVecEnv:
     def create(
         runtime: Runtime, rollout: int, snapshots: Sequence[Path],
         decision_a: dict[str, Any], decision_b: dict[str, Any], attempt: Path,
+        *, stage: str = "stage_c", arm_names: Sequence[str] | None = None,
     ):
         import gymnasium as gym
         from stable_baselines3.common.vec_env.base_vec_env import VecEnv
@@ -951,6 +952,8 @@ class ModalCampaignVecEnv:
         from .envs.smartsim_env import SmartSimVecEnv
 
         selected_modes = tuple(int(value) for value in decision_b["retained_modes"])
+        if arm_names is not None and len(arm_names) != 4:
+            raise ValueError("arm_names must contain one label for each environment")
         basis = real_cyclic_fourier_basis()[list(selected_modes)]
         safe_low, safe_high = map(float, runtime.config["campaign"]["safe_action_range"])
         reference = float(decision_a["reference_action"])
@@ -991,7 +994,10 @@ class ModalCampaignVecEnv:
                 self.pending_physical = None
                 self.writers = [
                     TrajectoryWriter(
-                        attempt / f"env_{env_id}_{path.name}",
+                        attempt / (
+                            str(arm_names[env_id]) if arm_names is not None
+                            else f"env_{env_id}_{path.name}"
+                        ),
                         runtime.config["campaign"]["raw_chunk_steps"],
                         store_raw_maps=False,
                     )
@@ -1082,7 +1088,8 @@ class ModalCampaignVecEnv:
                             else self.core._last_raw_wall_maps[env_id]
                         )
                         row = _transition_row(
-                            runtime.plan["name"], "stage_c", rollout, "PPO",
+                            runtime.plan["name"], stage, rollout,
+                            str(arm_names[env_id]) if arm_names is not None else "PPO",
                             snapshots[env_id].name, info, rewards[env_id],
                             full_modal, self.pending_physical[env_id],
                             done=bool(dones[env_id]),

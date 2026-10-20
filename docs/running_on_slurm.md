@@ -160,6 +160,23 @@ records `PAUSED_ALLOCATION` and exits successfully. Submit the same command
 again to continue. Raw wall maps are durable only for the preflight and Stage
 B identification data; Stages A and C retain compact trajectory tables.
 
+### Reduced five-snapshot V100 feasibility campaign
+
+For the current feasibility question, use the separate 43-hour protocol rather
+than the broader eight-snapshot design campaign:
+
+```bash
+export MCC_STORAGE_ROOT=/nobackup/projects/PROJECT/USER
+sbatch -A PROJECT cluster/slurm/bede_power9_v100_feasibility.slurm
+```
+
+It uses the five canonical fields under `MCC_STORAGE_ROOT/data/snapshots`, runs
+two compact identification blocks, five full-episode PPO updates, and three
+paired learned-versus-`+0.01` evaluation blocks. It persists no raw wall maps
+and resumes at committed block boundaries. The scientific scope and the
+predeclared gate are documented in
+[`bede_v100_feasibility.md`](bede_v100_feasibility.md).
+
 ### Two-node/two-V100 POWER9 integration smoke
 
 After the one-GPU test has warmed the POWER9 kernel caches, the dedicated

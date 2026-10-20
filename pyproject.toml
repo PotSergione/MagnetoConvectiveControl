@@ -30,6 +30,7 @@ mcc-train = "magnetoconvective_control.cli.train:main"
 mcc-submit = "magnetoconvective_control.cli.submit:main"
 mcc-evaluate = "magnetoconvective_control.evaluation:main"
 mcc-campaign = "magnetoconvective_control.campaign:main"
+mcc-feasibility = "magnetoconvective_control.feasibility:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

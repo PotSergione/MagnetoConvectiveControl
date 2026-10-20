@@ -1,0 +1,65 @@
+schema_version: 1
+
+run:
+  name: bede_v100_five_snapshot_feasibility_v1
+  artifact_root: runs
+
+case:
+  name: toroidal_gr1e9_ha1750
+  executable: cases/toroidal_gr1e9_ha1750/run_case.sh
+
+data:
+  snapshots: data/snapshots
+  snapshot_names:
+    - blanket0.f00250
+    - blanket0.f00260
+    - blanket0.f00270
+    - blanket0.f00280
+    - blanket0.f00290
+
+campaign:
+  seed: 5489
+  design_snapshots: 5
+  transitions: 1000
+  control_interval: 0.1
+  safe_action_range: [-0.03, 0.03]
+  raw_chunk_steps: 25
+  startup_timeout: 1200
+  allocation_hours: 43
+  reserve_hours: 5
+
+reward:
+  type: first_wall_ewma
+  reference_flux: 0.0166913
+  ewma_timescale: 10.0
+  scale: 1.0
+
+reference:
+  # Inherited from the earlier response study; this protocol does not spend
+  # trajectories repeating the static-action search.
+  action: 0.01
+
+identification:
+  blocks: 2
+  warmup_steps: 100
+  excitation_steps: 500
+  tail_steps: 400
+  target_perturbation_rms: 0.005
+  maximum_impulse_lag: 400
+  minimum_median_snr: 1.5
+  maximum_retained_modes: 4
+
+stage_c:
+  # One PPO update follows each set of four complete physical episodes.
+  rollouts: 5
+  batch_size: 400
+  epochs: 5
+  learning_rate: 1.0e-4
+  lstm_hidden_size: 128
+  gamma: 0.997
+  gae_lambda: 0.98
+
+evaluation:
+  paired_blocks: 3
+  primary_pairs: 5
+  minimum_win_count: 4
