@@ -1,0 +1,13 @@
+# Four physical NekRS environments on the four local V100s of one POWER9 node.
+parallelism:
+  physical_environments: 4
+  simulations_per_gpu: 1
+
+resources:
+  nodes: 1
+  gpus_per_node: 4
+
+# The batch launcher supplies a per-job port; do not replace it with the
+# shared machine profile's fallback port.
+smartsim:
+  port: null

@@ -55,6 +55,17 @@ and four local V100 workers. The production counterpart is
 `bede_power9_four_gpu_campaign.slurm`; it resumes completed atomic blocks and
 exits successfully when the next block would violate the allocation reserve.
 
+The Bede POWER9/V100 PPO training run with 200-step episodes is submitted with:
+
+```bash
+export MCC_STORAGE_ROOT=/nobackup/projects/bdman39/sergione
+sbatch -A bdman39 cluster/slurm/bede_power9_four_gpu_train.slurm
+```
+
+It preserves the workstation `first_wall_ppo_nsteps1000.yaml` training
+settings except for `training.episode_steps: 200`, uses all four local V100s,
+and writes checkpoints under `${MCC_STORAGE_ROOT}/training`.
+
 The one-GPU Bede job uses SmartSim's local launcher inside its allocation;
 `ghbatch` supplies the outer Slurm allocation, while Slurm client commands are
 not available at the aarch64 compute-node call site.
