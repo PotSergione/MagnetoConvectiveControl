@@ -62,11 +62,11 @@ export MCC_STORAGE_ROOT=/nobackup/projects/bdman39/sergione
 sbatch -A bdman39 cluster/slurm/bede_power9_four_gpu_train.slurm
 ```
 
-It uses `training.episode_steps: 200` and `ppo.rollout_steps: 250`. Across four
-physical environments and ten virtual agents, each PPO rollout therefore has
-10,000 samples, matching the policy-update cadence of the one-environment
-`first_wall_ppo_nsteps1000.yaml` run. It uses all four local V100s and writes
-checkpoints under `${MCC_STORAGE_ROOT}/training`.
+It uses `training.episode_steps: 200` and `ppo.rollout_steps: 200`, aligning
+each PPO rollout with one complete episode from each of the four physical
+environments. With ten virtual agents, every rollout contains 8,000 samples.
+It uses all four local V100s and writes checkpoints under
+`${MCC_STORAGE_ROOT}/training`.
 
 The one-GPU Bede job uses SmartSim's local launcher inside its allocation;
 `ghbatch` supplies the outer Slurm allocation, while Slurm client commands are
