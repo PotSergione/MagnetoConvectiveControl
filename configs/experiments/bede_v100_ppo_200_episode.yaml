@@ -1,9 +1,10 @@
 schema_version: 1
 
-# Bede counterpart of first_wall_ppo_nsteps1000.yaml. The sole training
-# parameter change is the shorter physical episode horizon.
+# Four-environment Bede counterpart of first_wall_ppo_nsteps1000.yaml.
+# Use 250 steps per environment so each PPO rollout still contains 10,000
+# virtual-agent samples: 4 environments * 250 steps * 10 virtual agents.
 run:
-  name: bede_v100_ppo_200_episode
+  name: bede_v100_ppo_200_episode_nsteps250
   artifact_root: /nobackup/projects/bdman39/sergione/training
 
 case:
@@ -22,7 +23,7 @@ reward:
   action_slew_regularization: 0.0
 
 ppo:
-  rollout_steps: 1000
+  rollout_steps: 250
   batch_size: 1000
   epochs: 5
   learning_rate: 1.0e-4
