@@ -212,6 +212,22 @@ def test_bede_power9_stack_smoke_is_one_gpu_one_update():
     assert config["training"]["total_timesteps"] == 20
 
 
+def test_bede_terminal_pilot_disables_horizon_bootstrap(monkeypatch):
+    config = compose(
+        PROJECT_ROOT
+        / "configs/experiments/bede_v100_ppo_200_terminal_pilot.yaml",
+        PROJECT_ROOT,
+        PROJECT_ROOT / "configs/machines/bede_power9_four_gpu.yaml",
+        PROJECT_ROOT / "configs/scales/bede_power9_four_gpu.yaml",
+    )
+    export_compatibility_environment(config)
+
+    assert config["training"]["episode_steps"] == 200
+    assert config["training"]["episode_horizon_truncated"] is False
+    assert config["training"]["total_timesteps"] == 80000
+    assert os.environ["RL_EPISODE_HORIZON_TRUNCATED"] == "False"
+
+
 def test_bede_power9_two_gpu_stack_smoke_is_multi_node_one_update(monkeypatch):
     monkeypatch.setenv("SMARTSIM_INTERFACE", "fabric0")
     monkeypatch.setenv("MCC_BEDE_MPIRUN", "/opt/bede/bin/bede-mpirun")

@@ -21,6 +21,19 @@ from ..envs.smartsim_env import SB3MARLSmartSimVecEnv, SmartSimVecEnv
 from ..policies.cnn_lstm import CNNFeatureExtractor
 
 
+def _environment_bool(name: str, default: bool) -> bool:
+    """Read an explicit boolean flag from the compatibility environment."""
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean, not {value!r}")
+
+
 
 # Cluster settings may be overridden without editing this file.
 N_ENVS = int(os.environ.get("RL_N_ENVS", "1"))
@@ -49,6 +62,9 @@ N_STEPS = int(os.environ.get("RL_N_STEPS", "256"))
 N_EPOCHS = int(os.environ.get("RL_N_EPOCHS", "10"))
 LEARNING_RATE = float(os.environ.get("RL_LEARNING_RATE", "3e-4"))
 MAX_EPISODE_STEPS = int(os.environ.get("RL_MAX_EPISODE_STEPS", "1000"))
+EPISODE_HORIZON_TRUNCATED = _environment_bool(
+    "RL_EPISODE_HORIZON_TRUNCATED", True
+)
 ACTION_BASELINE = float(os.environ.get("RL_ACTION_BASELINE", "0.0"))
 ACTION_SCALE = float(os.environ.get("RL_ACTION_SCALE", "1.0"))
 FIRST_WALL_HEAT_FLUX_BASELINE = float(
@@ -398,6 +414,7 @@ def main() -> None:
         "gamma": 0.997,
         "gae_lambda": 0.98,
         "episode_steps": MAX_EPISODE_STEPS,
+        "episode_horizon_truncated": EPISODE_HORIZON_TRUNCATED,
         "ppo_rollout_steps": N_STEPS,
         "ppo_batch_size": BATCH_SIZE,
         "ppo_epochs": N_EPOCHS,
@@ -430,6 +447,14 @@ def main() -> None:
         f"Parallel rollout: {N_ENVS} physical environments, "
         f"{N_ENVS * N_STEPS} physical transitions/update, "
         f"{rollout_samples} virtual-agent samples/update"
+    )
+    print(
+        "Episode horizon: "
+        + (
+            "truncated (bootstrap continuation value)"
+            if EPISODE_HORIZON_TRUNCATED
+            else "terminal (no continuation-value bootstrap)"
+        )
     )
 
     observation_space = gym.spaces.Dict(
@@ -473,6 +498,7 @@ def main() -> None:
             gpu_gres=GPU_GRES,
             cpus_per_simulation=CPUS_PER_SIMULATION,
             max_episode_steps=MAX_EPISODE_STEPS,
+            episode_horizon_truncated=EPISODE_HORIZON_TRUNCATED,
             snapshots_dir=str(SNAPSHOTS_DIRECTORY),
             startup_timeout=STARTUP_TIMEOUT,
             database_port=DATABASE_PORT,

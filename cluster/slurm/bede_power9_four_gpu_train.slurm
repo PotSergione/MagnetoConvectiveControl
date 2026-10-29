@@ -18,7 +18,7 @@ conda_base="${MCC_CONDA_BASE:-${platform_root}/miniconda}"
 conda_env="${MCC_CONDA_ENV:-${conda_base}/envs/mcc-stack-probe}"
 nekrs_home="${NEKRS_HOME:-${platform_root}/nekrs-mhd}"
 snapshots="${storage_root}/data/snapshots"
-experiment="${project_root}/configs/experiments/bede_v100_ppo_200_episode.yaml"
+experiment="${MCC_EXPERIMENT:-${project_root}/configs/experiments/bede_v100_ppo_200_episode.yaml}"
 machine="${project_root}/configs/machines/bede_power9_four_gpu.yaml"
 scale="${project_root}/configs/scales/bede_power9_four_gpu.yaml"
 

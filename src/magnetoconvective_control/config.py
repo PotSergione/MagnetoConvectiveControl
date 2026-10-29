@@ -26,6 +26,7 @@ ENVIRONMENT_KEYS = {
     ("ppo", "epochs"): "RL_N_EPOCHS",
     ("ppo", "learning_rate"): "RL_LEARNING_RATE",
     ("training", "episode_steps"): "RL_MAX_EPISODE_STEPS",
+    ("training", "episode_horizon_truncated"): "RL_EPISODE_HORIZON_TRUNCATED",
     ("training", "total_timesteps"): "RL_TOTAL_TIMESTEPS",
     ("training", "checkpoint_interval"): "RL_CHECKPOINT_INTERVAL",
     ("training", "metrics_interval"): "RL_METRICS_INTERVAL",
