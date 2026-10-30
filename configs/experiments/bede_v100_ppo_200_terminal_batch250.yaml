@@ -1,0 +1,37 @@
+schema_version: 1
+
+# Test smaller minibatches against the terminal pilot: 8,000 samples per
+# rollout / 250 samples per minibatch * 5 epochs = 160 optimizer steps.
+# Each sample still participates in five epochs. A 150k request completes
+# 19 whole rollouts (152k virtual-agent samples, 76 physical episodes).
+run:
+  name: bede_v100_ppo_200_terminal_batch250
+  artifact_root: /nobackup/projects/bdman39/sergione/training
+
+case:
+  name: toroidal_gr1e9_ha1750
+  executable: cases/toroidal_gr1e9_ha1750/run_case.sh
+
+data:
+  snapshots: /nobackup/projects/bdman39/sergione/data/snapshots
+
+reward:
+  type: first_wall_ewma
+  reference_flux: 0.0166913
+  ewma_timescale: 10.0
+  scale: 1.0
+  action_magnitude_regularization: 0.0
+  action_slew_regularization: 0.0
+
+ppo:
+  rollout_steps: 200
+  batch_size: 250
+  epochs: 5
+  learning_rate: 1.0e-4
+
+training:
+  episode_steps: 200
+  episode_horizon_truncated: false
+  total_timesteps: 150000
+  checkpoint_interval: 25000
+  metrics_interval: 2500
