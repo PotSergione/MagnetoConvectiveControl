@@ -1225,35 +1225,10 @@ def _stage_c_rollout(
                 return True
 
             def _on_rollout_end(self) -> None:
-                import torch as th
-                from sb3_contrib.common.recurrent.type_aliases import RNNStates
+                from .training.diagnostics import policy_means
 
                 buffer = self.model.rollout_buffer
-                deterministic_actions = []
-                self.model.policy.set_training_mode(False)
-                with th.no_grad():
-                    for step in range(buffer.buffer_size):
-                        observations = {
-                            key: th.as_tensor(value[step], device=self.model.device)
-                            for key, value in buffer.observations.items()
-                        }
-                        states = RNNStates(
-                            pi=(
-                                th.as_tensor(buffer.hidden_states_pi[step], device=self.model.device),
-                                th.as_tensor(buffer.cell_states_pi[step], device=self.model.device),
-                            ),
-                            vf=(
-                                th.as_tensor(buffer.hidden_states_vf[step], device=self.model.device),
-                                th.as_tensor(buffer.cell_states_vf[step], device=self.model.device),
-                            ),
-                        )
-                        actions, _, _, _ = self.model.policy.forward(
-                            observations, states,
-                            th.as_tensor(buffer.episode_starts[step], device=self.model.device),
-                            deterministic=True,
-                        )
-                        deterministic_actions.append(actions.cpu().numpy())
-                deterministic_actions = np.asarray(deterministic_actions)
+                deterministic_actions = policy_means(self.model, buffer)
                 final = attempt / "ppo_rollout.npz"
                 partial = final.with_name(final.name + ".partial")
                 with partial.open("wb") as stream:

@@ -482,6 +482,7 @@ class SmartSimVecEnv:
         )
         self._last_nu = np.full(n_envs, np.nan, dtype=np.float64)
         self._last_first_wall_flux = np.full(n_envs, np.nan, dtype=np.float64)
+        self._initial_first_wall_flux = np.full(n_envs, np.nan, dtype=np.float64)
         self._last_total_heating_power = np.full(n_envs, np.nan, dtype=np.float64)
         self._last_wall_fluxes = np.full((n_envs, 4), np.nan, dtype=np.float64)
         self._last_times = np.full(n_envs, np.nan, dtype=np.float64)
@@ -959,6 +960,7 @@ class SmartSimVecEnv:
             else:
                 reward = 0.0
                 self._last_actions[env_id] = actions.copy()
+                self._initial_first_wall_flux[env_id] = first_wall_heat_flux
             self._last_nu[env_id], self._last_tbar[env_id], self._last_kbar[env_id] = nu, tbar, kbar
             self._last_first_wall_flux[env_id] = first_wall_heat_flux
             self._last_total_heating_power[env_id] = total_heating_power
@@ -1275,6 +1277,7 @@ class SmartSimVecEnv:
                     {
                         "env_id": env_id,
                         "episode_id": int(self._episode_id[env_id]),
+                        "initial_first_wall_heat_flux": float(self._initial_first_wall_flux[env_id]),
                         "Tbar": float(self._last_tbar[env_id]),
                         "Kbar": float(self._last_kbar[env_id]),
                         "Nu": float(self._last_nu[env_id]),

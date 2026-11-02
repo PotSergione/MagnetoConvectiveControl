@@ -7,7 +7,6 @@ import json
 import os
 import re
 import signal
-from collections import deque
 from datetime import datetime, timezone
 from math import ceil
 from pathlib import Path
@@ -17,8 +16,8 @@ import numpy as np
 from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.callbacks import BaseCallback
 
-from ..envs.smartsim_env import SB3MARLSmartSimVecEnv, SmartSimVecEnv
 from ..policies.cnn_lstm import CNNFeatureExtractor
+from .diagnostics import DiagnosticRecurrentPPO, TrainingDiagnostics, write_provenance
 
 
 def _environment_bool(name: str, default: bool) -> bool:
@@ -128,6 +127,9 @@ class TrainingCheckpointCallback(BaseCallback):
         "completed_episodes",
         "episode_reward_mean",
         "episode_reward_std",
+        "rollout", "policy_version", "complete_rollout",
+        "recent_completed_episodes", "recent_episode_reward_mean",
+        "cumulative_episode_reward_mean",
     )
     EPISODE_FIELDS = (
         "timestamp_utc",
@@ -138,6 +140,7 @@ class TrainingCheckpointCallback(BaseCallback):
         "physical_steps",
         "episode_return",
         "end_reason",
+        "rollout", "policy_version", "initial_first_wall_heat_flux",
     )
 
     def __init__(
@@ -145,7 +148,6 @@ class TrainingCheckpointCallback(BaseCallback):
         model_directory: Path,
         checkpoint_interval: int,
         metrics_interval: int,
-        reward_window: int = 10000,
         verbose: int = 1,
     ) -> None:
         super().__init__(verbose=verbose)
@@ -158,15 +160,15 @@ class TrainingCheckpointCallback(BaseCallback):
         self.episode_metrics_path = model_directory / "episode_metrics.csv"
         self.checkpoint_interval = checkpoint_interval
         self.metrics_interval = metrics_interval
-        self.rewards: deque[float] = deque(maxlen=reward_window)
-        self.episode_rewards: deque[float] = deque(maxlen=1000)
+        self.rewards: list[float] = []
+        self.episode_rewards: list[float] = []
+        self.recent_episode_rewards: list[float] = []
         self.interval_physical_steps = 0
         self.interval_physical_reward_total = 0.0
         self.running_episode_rewards: np.ndarray | None = None
         self.completed_episodes = 0
         self.run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self.next_checkpoint = 0
-        self.next_metrics = 0
 
     def _on_training_start(self) -> None:
         self.model_directory.mkdir(parents=True, exist_ok=True)
@@ -176,28 +178,41 @@ class TrainingCheckpointCallback(BaseCallback):
         self.next_checkpoint = (
             current // self.checkpoint_interval + 1
         ) * self.checkpoint_interval
-        self.next_metrics = (
-            current // self.metrics_interval + 1
-        ) * self.metrics_interval
-        self._upgrade_metrics_schema()
+        self._upgrade_metrics_schema(self.metrics_path, self.METRIC_FIELDS)
+        self._upgrade_metrics_schema(self.episode_metrics_path, self.EPISODE_FIELDS)
+        self.diagnostics = TrainingDiagnostics(self.model, self.model_directory, self.run_id)
+        self.model._diagnostics = self.diagnostics
+        core = getattr(self.training_env, "core", None)
+        if core is not None:
+            write_provenance(self.model, self.diagnostics.directory, PROJECT_ROOT, core)
 
-    def _upgrade_metrics_schema(self) -> None:
+    def _on_rollout_start(self) -> None:
+        self.diagnostics.begin()
+        self.recent_episode_rewards.clear()
+
+    def _on_rollout_end(self) -> None:
+        self.diagnostics.finish()
+        self._write_metrics(int(self.model.num_timesteps), complete_rollout=True)
+
+    @staticmethod
+    def _upgrade_metrics_schema(path, fields) -> None:
         """Add newly introduced metric columns to an existing run CSV."""
-        if not self.metrics_path.is_file() or self.metrics_path.stat().st_size == 0:
+        if not path.is_file() or path.stat().st_size == 0:
             return
-        with self.metrics_path.open(newline="") as stream:
+        with path.open(newline="") as stream:
             reader = csv.DictReader(stream)
-            if reader.fieldnames == list(self.METRIC_FIELDS):
+            if reader.fieldnames == list(fields):
                 return
             rows = list(reader)
-        temporary = self.metrics_path.with_suffix(".csv.tmp")
+        temporary = path.with_suffix(".csv.tmp")
         with temporary.open("w", newline="") as stream:
-            writer = csv.DictWriter(stream, fieldnames=self.METRIC_FIELDS)
+            writer = csv.DictWriter(stream, fieldnames=fields)
             writer.writeheader()
             writer.writerows(rows)
-        os.replace(temporary, self.metrics_path)
+        os.replace(temporary, path)
 
     def _on_step(self) -> bool:
+        self.diagnostics.record(self.locals)
         rewards = np.asarray(self.locals["rewards"], dtype=float).reshape(-1)
         dones = np.asarray(self.locals["dones"], dtype=bool).reshape(-1)
         infos = self.locals.get("infos", [{} for _ in range(rewards.size)])
@@ -219,16 +234,15 @@ class TrainingCheckpointCallback(BaseCallback):
             index = group_index * ACT_DIM
             episode_return = float(self.running_episode_rewards[index])
             self.episode_rewards.append(episode_return)
+            self.recent_episode_rewards.append(episode_return)
             info = infos[index] if index < len(infos) else {}
             self._append_episode_metric(group_index, episode_return, info)
             self.running_episode_rewards[index:index + ACT_DIM] = 0.0
             self.completed_episodes += 1
 
         timesteps = int(self.model.num_timesteps)
-        if timesteps >= self.next_metrics:
-            self._write_metrics(timesteps)
-            while self.next_metrics <= timesteps:
-                self.next_metrics += self.metrics_interval
+        # Emit at the collection boundary, not at a virtual-step interval that
+        # can straddle episodes. Keep metrics_interval as a legacy CLI option.
 
         if timesteps >= self.next_checkpoint:
             self._save_checkpoint(timesteps)
@@ -249,6 +263,9 @@ class TrainingCheckpointCallback(BaseCallback):
             "physical_steps": info.get("episode_step"),
             "episode_return": episode_return,
             "end_reason": info.get("episode_end_reason", "unknown"),
+            "rollout": self.diagnostics.rollout,
+            "policy_version": self.diagnostics.policy_version,
+            "initial_first_wall_heat_flux": info.get("initial_first_wall_heat_flux", np.nan),
         }
         new_file = (
             not self.episode_metrics_path.exists()
@@ -260,7 +277,7 @@ class TrainingCheckpointCallback(BaseCallback):
                 writer.writeheader()
             writer.writerow(row)
 
-    def _write_metrics(self, timesteps: int) -> None:
+    def _write_metrics(self, timesteps: int, complete_rollout: bool = False) -> None:
         reward_values = np.asarray(self.rewards, dtype=float)
         episode_values = np.asarray(self.episode_rewards, dtype=float)
         if reward_values.size == 0 or self.interval_physical_steps == 0:
@@ -287,6 +304,16 @@ class TrainingCheckpointCallback(BaseCallback):
             "episode_reward_std": (
                 episode_values.std() if episode_values.size else np.nan
             ),
+            "rollout": self.diagnostics.rollout,
+            "policy_version": self.diagnostics.policy_version,
+            "complete_rollout": complete_rollout,
+            "recent_completed_episodes": len(self.recent_episode_rewards),
+            "recent_episode_reward_mean": (
+                np.mean(self.recent_episode_rewards) if self.recent_episode_rewards else np.nan
+            ),
+            "cumulative_episode_reward_mean": (
+                episode_values.mean() if episode_values.size else np.nan
+            ),
         }
         new_file = not self.metrics_path.exists() or self.metrics_path.stat().st_size == 0
         with self.metrics_path.open("a", newline="") as stream:
@@ -299,12 +326,14 @@ class TrainingCheckpointCallback(BaseCallback):
             "reward_mean", "reward_std", "reward_min", "reward_q05",
             "reward_median", "reward_q95", "reward_max",
             "interval_physical_steps", "interval_physical_reward_total",
-            "episode_reward_mean", "episode_reward_std",
+            "recent_completed_episodes", "recent_episode_reward_mean",
+            "cumulative_episode_reward_mean",
         ):
             self.logger.record(f"reward_distribution/{key}", row[key])
         self.logger.record("reward_distribution/completed_episodes", self.completed_episodes)
         self.interval_physical_steps = 0
         self.interval_physical_reward_total = 0.0
+        self.rewards.clear()
 
     def _save_checkpoint(self, timesteps: int) -> None:
         numbered_path = self.checkpoint_directory / f"step_{timesteps:012d}.zip"
@@ -318,6 +347,8 @@ class TrainingCheckpointCallback(BaseCallback):
         active_model = model if model is not None else self.model
         timesteps = int(active_model.num_timesteps)
         if hasattr(self, "model"):
+            if hasattr(self, "diagnostics"):
+                self.diagnostics.save_partial()
             self._write_metrics(timesteps)
             self._save_checkpoint(timesteps)
         else:
@@ -334,6 +365,8 @@ def _raise_on_termination(signum, _frame) -> None:
 
 
 def main() -> None:
+    from ..envs.smartsim_env import SB3MARLSmartSimVecEnv, SmartSimVecEnv
+
     if N_ENVS < 1:
         raise ValueError("RL_N_ENVS must be positive")
     if SIMULATIONS_PER_GPU < 1:
@@ -517,7 +550,7 @@ def main() -> None:
 
         if latest_path.is_file():
             print(f"Resuming model '{MODEL_NAME}' from {latest_path}")
-            model = RecurrentPPO.load(str(latest_path), env=env, device="cpu")
+            model = DiagnosticRecurrentPPO.load(str(latest_path), env=env, device="cpu")
         else:
             print(f"Starting new model '{MODEL_NAME}' in {model_directory}")
             policy_kwargs = {
@@ -530,7 +563,7 @@ def main() -> None:
                 "enable_critic_lstm":True,
                 "log_std_init":-2.3
             }
-            model = RecurrentPPO(
+            model = DiagnosticRecurrentPPO(
                 "MultiInputLstmPolicy",
                 env,
                 n_steps=N_STEPS,
