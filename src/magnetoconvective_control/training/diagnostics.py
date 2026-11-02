@@ -291,8 +291,9 @@ def write_provenance(model, directory, root, core):
         "packages": {name: version(name) for name in (
             "stable-baselines3", "sb3-contrib", "torch", "numpy", "gymnasium", "smartredis", "smartsim")},
         "model_seed": model.seed,
-        "snapshot_selection": "SystemRandom shuffled cycles; actual selections saved in rollout records",
-        "snapshot_seed": None,
+        "snapshot_selection": ("Per-worker seeded shuffled cycles" if core.snapshot_seed is not None
+                               else "SystemRandom shared shuffled cycles"),
+        "snapshot_seed": core.snapshot_seed,
         "snapshot_schedules": core._snapshot_schedules,
         "model": {name: getattr(model, name) for name in (
             "n_steps", "batch_size", "n_epochs", "gamma", "gae_lambda", "normalize_advantage",

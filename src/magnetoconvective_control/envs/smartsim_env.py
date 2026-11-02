@@ -262,6 +262,7 @@ class SmartSimVecEnv:
         nekrs_cache_dir: str | None = None,
         bede_mpi_command: str = "bede-mpirun",
         allocation_hosts: str | Sequence[str] | None = None,
+        snapshot_seed: int | None = None,
     ):
         if n_envs < 1:
             raise ValueError("n_envs must be positive")
@@ -444,6 +445,9 @@ class SmartSimVecEnv:
         self._snapshot_schedule_indices = [0] * n_envs
         self._snapshot_rng = random.SystemRandom()
         self._snapshot_queue: list[Path] = []
+        self.snapshot_seed = snapshot_seed
+        self._snapshot_rngs = [random.Random(snapshot_seed + i) for i in range(n_envs)] if snapshot_seed is not None else []
+        self._snapshot_queues: list[list[Path]] = [[] for _ in range(n_envs)]
         if (
             not np.isfinite(first_wall_heat_flux_baseline)
             or first_wall_heat_flux_baseline <= 0
@@ -742,10 +746,15 @@ class SmartSimVecEnv:
             raise FileNotFoundError(
                 f"No checkpoint files found in snapshot directory: {self.snapshots_dir}"
             )
-        if not self._snapshot_queue:
-            self._snapshot_queue = snapshots.copy()
-            self._snapshot_rng.shuffle(self._snapshot_queue)
-        return self._snapshot_queue.pop()
+        if getattr(self, "snapshot_seed", None) is not None:
+            # One stream per worker: a recovery cannot shift the other workers' starts.
+            queue, rng = self._snapshot_queues[env_id], self._snapshot_rngs[env_id]
+        else:
+            queue, rng = self._snapshot_queue, self._snapshot_rng
+        if not queue:
+            queue.extend(snapshots)
+            rng.shuffle(queue)
+        return queue.pop()
 
     @staticmethod
     def _set_model_restart_file(model, snapshot_name: str) -> None:

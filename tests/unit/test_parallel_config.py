@@ -17,6 +17,62 @@ from magnetoconvective_control.config import (
 PROJECT_ROOT = Path(__file__).parents[2]
 
 
+@pytest.mark.parametrize("variant,seed,epochs,noise", [
+    ("reference", 5489, 5, -2.3), ("replica", 5490, 5, -2.3),
+    ("one_epoch", 5489, 1, -2.3), ("low_noise", 5489, 5, -3.506557897319982),
+])
+def test_credit_campaign_resolves_and_exports(variant, seed, epochs, noise, monkeypatch):
+    monkeypatch.setattr(os, "environ", os.environ.copy())
+    config = compose(
+        PROJECT_ROOT / f"configs/experiments/bede_v100_ppo_200_credit_{variant}.yaml",
+        PROJECT_ROOT,
+        PROJECT_ROOT / "configs/machines/bede_power9_four_gpu.yaml",
+        PROJECT_ROOT / "configs/scales/bede_power9_four_gpu.yaml",
+    )
+    export_compatibility_environment(config)
+    assert parallel_plan(config).physical_environments == 4
+    expected = {
+        "RL_GAMMA": .997, "RL_GAE_LAMBDA": 1, "RL_LOG_STD_INIT": noise,
+        "RL_SEED": seed, "RL_SNAPSHOT_SEED": seed,
+        "RL_N_STEPS": 200, "RL_MAX_EPISODE_STEPS": 200,
+        "RL_N_EPOCHS": epochs, "RL_BATCH_SIZE": 1000,
+        "RL_TOTAL_TIMESTEPS": 150000, "RL_METRICS_INTERVAL": 8000,
+    }
+    for key, value in expected.items():
+        assert float(os.environ[key]) == value
+    assert os.environ["RL_EPISODE_HORIZON_TRUNCATED"] == "False"
+
+
+def test_credit_launcher_delegates_with_isolated_paths_and_lock(tmp_path):
+    import fcntl
+    import subprocess
+
+    launcher = PROJECT_ROOT / "cluster/slurm/bede_power9_four_gpu_credit.slurm"
+    scripts = tmp_path / "checkout/cluster/slurm"
+    scripts.mkdir(parents=True)
+    (scripts / "bede_power9_four_gpu_train.slurm").write_text(
+        '#!/bin/bash\nprintenv MCC_EXPERIMENT MCC_WORK_DIR\n'
+    )
+    environment = {
+        **os.environ, "MCC_PROJECT_ROOT": str(tmp_path / "checkout"),
+        "MCC_STORAGE_ROOT": str(tmp_path / "storage"), "SLURM_JOB_ID": "12345",
+    }
+    for variant in ("reference", "replica", "one_epoch", "low_noise"):
+        result = subprocess.run(["bash", str(launcher), variant], env=environment,
+                                text=True, capture_output=True, check=True)
+        experiment, work = result.stdout.splitlines()
+        assert experiment.endswith(f"bede_v100_ppo_200_credit_{variant}.yaml")
+        assert work == str(tmp_path / f"storage/training/work/credit-{variant}-12345")
+    invalid = subprocess.run(["bash", str(launcher), "typo"], env=environment, capture_output=True)
+    assert invalid.returncode == 2
+    with (tmp_path / "storage/training/.credit-reference.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        duplicate = subprocess.run(["bash", str(launcher), "reference"], env=environment,
+                                   text=True, capture_output=True)
+        assert duplicate.returncode == 1
+        assert "already running" in duplicate.stderr
+
+
 def test_scale_override_changes_only_parallel_shape():
     experiment = {"run": {"name": "test"}, "ppo": {"rollout_steps": 1000}}
     machine = {"launcher": {"type": "slurm", "gpu_resource": "gpu:1"}}

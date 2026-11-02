@@ -68,6 +68,49 @@ environments. With ten virtual agents, every rollout contains 8,000 samples.
 It uses all four local V100s and writes checkpoints under
 `${MCC_STORAGE_ROOT}/training`.
 
+### Credit-assignment campaign
+
+Use `bede_power9_four_gpu_credit.slurm` with one variant argument:
+
+| Variant | Model/snapshot seed | Epochs | Initial action sigma |
+|---|---:|---:|---:|
+| `reference` (A) | 5489 | 5 | exp(-2.3), approximately 0.10 |
+| `replica` (B) | 5490 | 5 | approximately 0.10 |
+| `one_epoch` (C) | 5489 | 1 | approximately 0.10 |
+| `low_noise` (optional D) | 5489 | 5 | 0.03 |
+
+All use gamma 0.997, GAE lambda 1, batch size 1000, learning rate 1e-4,
+200-step terminal episodes and 200-step rollouts. The control interval remains
+0.1. A 150,000-sample request completes 19 rollouts (152,000 samples), with
+one metrics report per rollout. Five epochs give 40 optimizer steps per
+rollout; one epoch gives eight.
+
+From the Bede checkout after pulling the changes:
+
+```bash
+export MCC_STORAGE_ROOT=/nobackup/projects/bdman39/sergione
+sbatch -A bdman39 --job-name=mcc-credit-a cluster/slurm/bede_power9_four_gpu_credit.slurm reference
+sbatch -A bdman39 --job-name=mcc-credit-c cluster/slurm/bede_power9_four_gpu_credit.slurm one_epoch
+sbatch -A bdman39 --job-name=mcc-credit-b cluster/slurm/bede_power9_four_gpu_credit.slurm replica
+# Optional exploration-amplitude comparison:
+sbatch -A bdman39 --job-name=mcc-credit-d cluster/slurm/bede_power9_four_gpu_credit.slurm low_noise
+```
+
+Each requests one four-V100 node for 43 hours and delegates setup to the
+existing four-GPU training launcher. New run names are
+`bede_v100_ppo_200_credit_VARIANT`; the versioned experiment YAMLs specify
+the snapshot and artifact paths. Different variants can run concurrently:
+SmartSim work and TensorBoard files are isolated in
+`MCC_STORAGE_ROOT/training/work/credit-VARIANT-JOBID/`. A file lock prevents
+simultaneous launches of the same variant. Existing batch-size jobs are unchanged.
+
+Seeds govern policy initialization/sampling and independent per-worker shuffled
+snapshot cycles. A worker recovery does not change other workers' snapshot
+sequences. Reusing a variant with an existing checkpoint resumes it and requests
+**another** 150,000 samples; use a new run name for a fresh repeat. On resume,
+snapshot cycles restart from their seed, rather than restoring their previous
+position. Actual selected snapshots are retained in the diagnostics.
+
 The one-GPU Bede job uses SmartSim's local launcher inside its allocation;
 `ghbatch` supplies the outer Slurm allocation, while Slurm client commands are
 not available at the aarch64 compute-node call site.

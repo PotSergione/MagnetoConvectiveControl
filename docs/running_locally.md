@@ -54,8 +54,10 @@ contain no invented advantage/return estimates and are not phase-summarized.
 Every artifact identifies the session, rollout, collection policy version and
 sample range. `policy_version` is SB3's pre-collection `_n_updates` epoch
 counter, not a count of gradient steps. Episode IDs, snapshots and end reasons
-are recorded per physical transition. The existing unseeded snapshot selector
-is explicitly labelled `SystemRandom`; the records retain its actual choices.
+are recorded per physical transition. With `data.snapshot_seed`, each worker
+uses its own seeded shuffled snapshot cycles; without it the existing shared
+`SystemRandom` selector is retained. `training.seed` controls the policy RNG.
+Provenance records both seeds, and rollout records retain the actual choices.
 Diagnostics do not seed or consume the training RNG, change recurrent states,
 or add CFD steps. Policy means require one additional deterministic actor pass
 through the stored rollout, but no wall fields or recurrent states are saved.

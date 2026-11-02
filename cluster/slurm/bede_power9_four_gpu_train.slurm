@@ -107,7 +107,10 @@ echo "Artifacts:  /nobackup/projects/bdman39/sergione/training"
 echo "Commit:     $(git -C "${project_root}" rev-parse HEAD)"
 echo "Job:        ${SLURM_JOB_ID} on $(hostname)"
 
-cd "${project_root}"
+work_dir="${MCC_WORK_DIR:-${project_root}}"
+mkdir -p "${work_dir}"
+echo "Work dir:   ${work_dir}"
+cd "${work_dir}"
 python -u -m magnetoconvective_control.cli.train \
     --experiment "${experiment}" \
     --machine "${machine}" \

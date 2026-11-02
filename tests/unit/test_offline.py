@@ -1,6 +1,7 @@
 """Dependency-free contract tests; these never launch SmartSim or NekRS."""
 
 import ast
+import random
 import time
 from dataclasses import dataclass
 from math import exp
@@ -13,6 +14,34 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).parents[2]
 ENV_PATH = PROJECT_ROOT / "src" / "magnetoconvective_control" / "envs" / "smartsim_env.py"
 CASE_PATH = PROJECT_ROOT / "cases" / "toroidal_gr1e9_ha1750"
+
+
+def test_seeded_snapshot_streams_are_repeatable_and_worker_local(tmp_path):
+    tree = ast.parse(ENV_PATH.read_text())
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "SmartSimVecEnv")
+    method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "_select_snapshot")
+    import re
+    namespace = {"re": re, "Path": Path}
+    exec(compile(ast.Module([method], type_ignores=[]), str(ENV_PATH), "exec"), namespace)
+    for i in range(5):
+        (tmp_path / f"blanket0.f{i:05d}").touch()
+    class Dummy:
+        _select_snapshot = namespace["_select_snapshot"]
+        snapshot_path = None
+        snapshots_dir = tmp_path
+        snapshot_seed = 5489
+        def __init__(self):
+            self._snapshot_queues = [[], []]
+            self._snapshot_rngs = [random.Random(self.snapshot_seed + i) for i in range(2)]
+    first, second = Dummy(), Dummy()
+    expected = [first._select_snapshot(1) for _ in range(10)]
+    actual = []
+    for _ in range(10):
+        second._select_snapshot(0)  # Recoveries in worker 0 do not advance worker 1.
+        second._select_snapshot(0)
+        actual.append(second._select_snapshot(1))
+    assert actual == expected
+    assert len(set(actual[:5])) == len(set(actual[5:])) == 5
 
 
 def _load_selected(*names):

@@ -60,6 +60,11 @@ CPUS_PER_SIMULATION = int(
 N_STEPS = int(os.environ.get("RL_N_STEPS", "256"))
 N_EPOCHS = int(os.environ.get("RL_N_EPOCHS", "10"))
 LEARNING_RATE = float(os.environ.get("RL_LEARNING_RATE", "3e-4"))
+GAMMA = float(os.environ.get("RL_GAMMA", "0.997"))
+GAE_LAMBDA = float(os.environ.get("RL_GAE_LAMBDA", "0.98"))
+LOG_STD_INIT = float(os.environ.get("RL_LOG_STD_INIT", "-2.3"))
+SEED = int(os.environ["RL_SEED"]) if "RL_SEED" in os.environ else None
+SNAPSHOT_SEED = int(os.environ["RL_SNAPSHOT_SEED"]) if "RL_SNAPSHOT_SEED" in os.environ else None
 MAX_EPISODE_STEPS = int(os.environ.get("RL_MAX_EPISODE_STEPS", "1000"))
 EPISODE_HORIZON_TRUNCATED = _environment_bool(
     "RL_EPISODE_HORIZON_TRUNCATED", True
@@ -367,6 +372,10 @@ def _raise_on_termination(signum, _frame) -> None:
 def main() -> None:
     from ..envs.smartsim_env import SB3MARLSmartSimVecEnv, SmartSimVecEnv
 
+    if not (0 <= GAMMA <= 1 and 0 <= GAE_LAMBDA <= 1):
+        raise ValueError("gamma and gae_lambda must lie in [0, 1]")
+    if not np.isfinite(LOG_STD_INIT):
+        raise ValueError("log_std_init must be finite")
     if N_ENVS < 1:
         raise ValueError("RL_N_ENVS must be positive")
     if SIMULATIONS_PER_GPU < 1:
@@ -444,8 +453,11 @@ def main() -> None:
         "first_wall_heat_flux_baseline": FIRST_WALL_HEAT_FLUX_BASELINE,
         "reward_scale": REWARD_SCALE,
         "ewma_timescale": EWMA_TIMESCALE,
-        "gamma": 0.997,
-        "gae_lambda": 0.98,
+        "gamma": GAMMA,
+        "gae_lambda": GAE_LAMBDA,
+        "log_std_init": LOG_STD_INIT,
+        "seed": SEED,
+        "snapshot_seed": SNAPSHOT_SEED,
         "episode_steps": MAX_EPISODE_STEPS,
         "episode_horizon_truncated": EPISODE_HORIZON_TRUNCATED,
         "ppo_rollout_steps": N_STEPS,
@@ -455,8 +467,13 @@ def main() -> None:
         "control_interval": 0.1,
     }
     contract_path = model_directory / "run_contract.json"
-    if contract_path.is_file() and json.loads(contract_path.read_text()) != run_contract:
-        raise ValueError(f"Model {MODEL_NAME!r} has an incompatible run contract")
+    if contract_path.is_file():
+        saved_contract = json.loads(contract_path.read_text())
+        # Preserve compatibility with runs created before configurable seeds/noise.
+        for key, default in {"seed": None, "snapshot_seed": None, "log_std_init": -2.3}.items():
+            saved_contract.setdefault(key, default)
+        if saved_contract != run_contract:
+            raise ValueError(f"Model {MODEL_NAME!r} has an incompatible run contract")
     contract_path.write_text(json.dumps(run_contract, indent=2) + "\n")
     if mapping_path.is_file():
         saved_mapping = json.loads(mapping_path.read_text())
@@ -489,6 +506,9 @@ def main() -> None:
             else "terminal (no continuation-value bootstrap)"
         )
     )
+    print(f"PPO: gamma={GAMMA:g}, lambda={GAE_LAMBDA:g}, batch={BATCH_SIZE}, "
+          f"epochs={N_EPOCHS}, log_std_init={LOG_STD_INIT:g}; "
+          f"model seed={SEED}, snapshot seed={SNAPSHOT_SEED}")
 
     observation_space = gym.spaces.Dict(
         {
@@ -533,6 +553,7 @@ def main() -> None:
             max_episode_steps=MAX_EPISODE_STEPS,
             episode_horizon_truncated=EPISODE_HORIZON_TRUNCATED,
             snapshots_dir=str(SNAPSHOTS_DIRECTORY),
+            snapshot_seed=SNAPSHOT_SEED,
             startup_timeout=STARTUP_TIMEOUT,
             database_port=DATABASE_PORT,
             database_interface=DATABASE_INTERFACE,
@@ -561,7 +582,7 @@ def main() -> None:
                 "n_lstm_layers": 1,
                 "shared_lstm": False,
                 "enable_critic_lstm":True,
-                "log_std_init":-2.3
+                "log_std_init": LOG_STD_INIT,
             }
             model = DiagnosticRecurrentPPO(
                 "MultiInputLstmPolicy",
@@ -570,8 +591,9 @@ def main() -> None:
                 batch_size=BATCH_SIZE,
                 n_epochs=N_EPOCHS,
                 learning_rate=LEARNING_RATE,
-                gamma=0.997,
-                gae_lambda=0.98,
+                gamma=GAMMA,
+                gae_lambda=GAE_LAMBDA,
+                seed=SEED,
                 policy_kwargs=policy_kwargs,
                 tensorboard_log="./tensorboard/",
                 device="cpu",
